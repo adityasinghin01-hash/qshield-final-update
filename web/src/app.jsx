@@ -1,5 +1,6 @@
 import React from "react";
 import * as ReactDOM from "react-dom/client";
+import { EvidenceDialog, PlanningContext, TLSProvenance } from "./evidence-controls.jsx";
 import "@fontsource/manrope/latin-400.css";
 import "@fontsource/manrope/latin-500.css";
 import "@fontsource/manrope/latin-600.css";
@@ -23,7 +24,7 @@ import "@fontsource/ibm-plex-mono/latin-600.css";
       info: { bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/30', badge: 'bg-emerald-600 text-white' },
     };
 
-function QuantumScene({ loading, total, critical, quantum, onDemo }) {
+function QuantumScene({ loading, total, critical, quantum, onDemo, isDemo }) {
   const canvasRef = React.useRef(null);
   const [layer, setLayer] = useState('quantum');
   const [paused, setPaused] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -54,10 +55,10 @@ function QuantumScene({ loading, total, critical, quantum, onDemo }) {
     const observer=new IntersectionObserver(([entry])=>{visible=entry.isIntersecting;});observer.observe(canvas);resize.observe(canvas);tick();
     return()=>{cancelAnimationFrame(frame);resize.disconnect();observer.disconnect();canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);canvas.removeEventListener('pointercancel',up);};
   },[layer,paused,loading]);
-  return <section id="overview" data-scroll-section className="ops-hero" aria-label="Cryptographic command center">
+  return <section id="globe-model" data-scroll-section className="ops-hero" aria-label="Cryptographic command center">
     <div className="ops-copy"><div className="ops-eyebrow"><i className="ops-dot"/> POST-QUANTUM DEFENSE SYSTEM <span>/ 01</span></div><h1>THE NEXT<br/>THREAT IS<br/><em>ALREADY HERE.</em></h1><p>See the cracks in your cryptography.<br/>Map your exposure. Move beyond the quantum threat.</p><div className="ops-actions"><a className="ops-cta" href="#scan-console">INITIALIZE SCAN <span>↗</span></a><button className="ops-secondary" onClick={onDemo} disabled={loading}>Explore demo ↗</button></div><div className="ops-tags"><span>01 / DISCOVER</span><span>02 / ASSESS</span><span>03 / MIGRATE</span></div></div>
     <div className="ops-stage"><div className="ops-stage-top"><span>CRYPTOGRAPHIC ATTACK SURFACE</span><b>{loading?'◌ ANALYZING':'◉ INTERACTIVE MODEL'}</b></div><canvas ref={canvasRef} role="img" aria-label="Draggable 3D wireframe globe showing illustrative cryptographic nodes"/><span className="ops-stage-note">DRAG TO ROTATE / SELECT A LAYER TO EXPLORE</span><div className="ops-controls"><div className="ops-layers">{['quantum','tls','code'].map(x=><button key={x} aria-pressed={layer===x} onClick={()=>setLayer(x)}>{x.toUpperCase()}</button>)}</div><button className="ops-motion" onClick={()=>setPaused(!paused)} aria-pressed={paused}>{paused?'▶ RESUME':'Ⅱ PAUSE'}</button></div></div>
-    <div className="ops-telemetry"><div><i className="ops-dot"/><span aria-live="polite">{loading?'Pipeline executing':'Analysis workspace'}<br/>{loading?'Receiving scan results':'TLS + source intelligence'}</span></div><div><strong>{total??'—'}</strong><span>Assessed<br/>findings</span></div><div><strong style={{color:'#ff8269'}}>{critical??'—'}</strong><span>Critical<br/>exposures</span></div><div><strong style={{color:'var(--acid)'}}>{quantum??'—'}</strong><span>Quantum<br/>findings</span></div></div>
+    <div className="ops-telemetry"><div><i className="ops-dot"/><span aria-live="polite">{loading?'Pipeline executing':isDemo?'DEMO / illustrative counters':'Analysis workspace'}<br/>{loading?'Receiving scan results':'TLS + source intelligence'}</span></div><div><strong>{total??'—'}</strong><span>Assessed<br/>findings</span></div><div><strong style={{color:'#ff8269'}}>{critical??'—'}</strong><span>Critical<br/>exposures</span></div><div><strong style={{color:'var(--acid)'}}>{quantum??'—'}</strong><span>Quantum<br/>findings</span></div></div>
   </section>;
 }
 
@@ -85,7 +86,7 @@ function VisualIntelligence({data,onSeverity,onAlgorithm,onInspect,onTrack,onRes
   };
   let offset=0;
   return <section id="intelligence" data-scroll-section className="intel" aria-label="Interactive scan intelligence">
-    <div className="intel-heading"><div><span className="ops-mono">02 / ANALYZE THE SIGNAL</span><h2>Your exposure. In focus.</h2></div><div className="intel-tools"><span className="intel-live">{data?'● SCAN SNAPSHOT':'○ AWAITING RESULTS'}</span>{filtered&&<button onClick={onReset}>Reset finding filters ↺</button>}</div></div>
+    <div className="intel-heading"><div><span className="ops-mono">02 / ANALYZE THE SIGNAL</span><h2>Your exposure. In focus.</h2></div><div className="intel-tools"><span className="intel-live">{data?.metadata?.is_demo?'● DEMO / ILLUSTRATIVE COUNTERS':data?'● SCAN SNAPSHOT':'○ AWAITING RESULTS'}</span>{filtered&&<button onClick={onReset}>Reset finding filters ↺</button>}</div></div>
     {filtered&&<div className="intel-filter-notice" aria-live="polite"><span>Evidence filter: <b>{[activeTab!=='all'?activeTab:null,sevFilter!=='all'?sevFilter:null,searchQuery||null].filter(Boolean).join(' / ')}</b><small>Charts show the full scan snapshot.</small></span><a href="#findings-console">View filtered evidence ↓</a></div>}
     {!data?<div className="intel-empty">Run a scan or load the demo to populate your visual intelligence.</div>:total===0?<div className="intel-empty">No assessed findings in this report. Check scanner diagnostics and evidence before drawing conclusions.</div>:<>
     <div className="intel-grid">
@@ -103,7 +104,7 @@ function VisualIntelligence({data,onSeverity,onAlgorithm,onInspect,onTrack,onRes
 function ScrollNavigation(){
  const [progress,setProgress]=useState(0),[active,setActive]=useState('overview');
  useEffect(()=>{let frame=0;const update=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{const height=document.documentElement.scrollHeight-innerHeight;setProgress(height>0?scrollY/height*100:0);});};window.addEventListener('scroll',update,{passive:true});window.addEventListener('resize',update);const observer=new IntersectionObserver(entries=>{entries.forEach(e=>{if(e.isIntersecting)setActive(e.target.id);});},{rootMargin:'-15% 0px -60% 0px'});document.querySelectorAll('[data-scroll-section]').forEach(el=>observer.observe(el));update();return()=>{window.removeEventListener('scroll',update);window.removeEventListener('resize',update);cancelAnimationFrame(frame);observer.disconnect();};},[]);
- return <nav className="cyber-nav" aria-label="Page sections"><div><a className="cyber-nav-brand" href="#overview">Q / OPERATIONS</a><div className="cyber-nav-links">{[['overview','Overview'],['incident-brief','Recent incident'],['scan-console','Scan'],['intelligence','Intelligence'],['attack-surface','Attack surface'],['horizon-lab','Horizon lab'],['findings-console','Evidence']].map(([id,label],i)=><a key={id} href={'#'+id} aria-current={active===id?'location':undefined}><small>0{i+1}</small>{label}</a>)}</div><span className="cyber-nav-progress" aria-hidden="true">{Math.round(progress)}%</span></div><i style={{width:`${progress}%`}}/></nav>;
+ return <nav className="cyber-nav" aria-label="Page sections"><div><a className="cyber-nav-brand" href="#overview">Q / OPERATIONS</a><div className="cyber-nav-links">{[['overview','Overview'],['scan-console','Scan'],['results-summary','Results'],['findings-console','Evidence'],['intelligence','Intelligence'],['horizon-lab','Horizon lab'],['incident-brief','Incident']].map(([id,label],i)=><a key={id} onClick={()=>{for(let ancestor=document.getElementById(id)?.parentElement;ancestor;ancestor=ancestor.parentElement){if(ancestor.tagName==='DETAILS')ancestor.open=true;}}} href={'#'+id} aria-current={active===id?'location':undefined}><small>0{i+1}</small>{label}</a>)}</div><span className="cyber-nav-progress" aria-hidden="true">{Math.round(progress)}%</span></div><i style={{width:`${progress}%`}}/></nav>;
 }
 function CyberExploration({data,onInspect}){
  const [route,setRoute]=useState('tls'),[stage,setStage]=useState(1),[shelf,setShelf]=useState(10),[migration,setMigration]=useState(5),[horizon,setHorizon]=useState(15);
@@ -123,7 +124,7 @@ function EvidenceCoverage({data}) {
  const summary=data?.risk_assessment?.summary||{}, coverage=summary.coverage?.source;
  const assets=summary.affected_asset_counts||{};
  return <section className="release-panel" aria-label="Assessment evidence and coverage">
-  <div className="intel-panel-head"><h3>Evidence behind this assessment</h3><span>{summary.coverage?.status||'UNAVAILABLE'} / OBSERVED SCOPE</span></div>
+  <div className="intel-panel-head"><h3>Evidence behind this assessment</h3><span>{data.metadata?.is_demo?'DEMO / ILLUSTRATIVE · ':''}{summary.coverage?.status||'UNAVAILABLE'} / OBSERVED SCOPE</span></div>
   <div className="release-deltas">
    <div><span>Known critical findings</span><strong>{summary.severity?.critical??'—'}</strong></div>
    <div><span>Affected assets</span><strong>{assets.total??'—'}</strong><small>Distinct files or endpoints with assessed risks</small></div>
@@ -189,7 +190,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
           <div className="incident-diagram" role="img" aria-label="Illustrative attack path: a weak certificate-authority key could enable a forged website certificate, then website impersonation if a connection is intercepted and the chain is still trusted. This is a potential attack, not evidence of exploitation."><span className="ops-mono">HOW TRUST COULD BE ABUSED</span><div className="incident-chain"><div><span>⌘</span><b>Weak CA key</b><small>Authority compromised</small></div><i>→</i><div className="incident-broken"><span>◇</span><b>Forged certificate</b><small>False website identity</small></div><i>→</i><div><span>▣</span><b>Impersonation</b><small>Connection at risk</small></div></div><p>Requires an intercepted connection and a client that still trusts the affected chain. Updated revocation and trust controls block that path.</p><span className="incident-diagram-note">ILLUSTRATIVE RISK · NOT A CONFIRMED ATTACK</span></div>
         </div>
         <div className="incident-facts"><article><strong>08</strong><div><b>Intermediate CA certificates</b><p>Weak keys were reported on 17 October and revoked on 18 October, according to eMudhra.</p></div></article><article><strong>≠</strong><div><b>A key-generation failure</b><p>The flaw did not break the P-384 algorithm. This was a conventional cryptographic failure, not a quantum attack.</p></div></article><article className="incident-unaffected"><strong>✓</strong><div><b>India DSC &amp; eSign unaffected</b><p>CERT-In distinguishes the affected international certificate infrastructure from India’s regulated signing services.</p></div></article></div>
-        <div className="incident-timeline" aria-label="Incident timeline">{[['17 OCT','Weak keys reported','Researcher alerts browser vendors.'],['18 OCT','Eight CAs revoked','eMudhra revokes the affected intermediates.'],['20 OCT','Firefox protection update','Mozilla documents blocking and additional security releases.'],['28 OCT','Transition update','eMudhra reports ongoing migration of TLS customers.']].map(([date,title,body])=><article key={date}><time dateTime={'2026-10-'+date.slice(0,2)}>{date} 2026</time><i/><h3>{title}</h3><p>{body}</p></article>)}</div>
+        <div className="incident-timeline" aria-label="Incident timeline">{[['17 OCT','Initial Firefox blocking','Report received 20:06 UTC; initial OneCRL distribution completed 22:59 UTC for standard Firefox configurations.'],['18 OCT','Eight CAs revoked','eMudhra revokes the affected intermediates.'],['20 OCT','Public response + releases','Mozilla publishes its response and additional releases for custom settings. Initial OneCRL protection began on 17 October.'],['28 OCT','Transition update','eMudhra reports ongoing migration of TLS customers.']].map(([date,title,body])=><article key={date}><time dateTime={'2026-10-'+date.slice(0,2)}>{date} 2026</time><i/><h3>{title}</h3><p>{body}</p></article>)}</div>
         <div className="incident-actions" id="incident-actions"><div className="incident-action-intro"><span className="ops-mono">FROM AWARENESS TO ACTION</span><h3>Protect your next<br/>connection.</h3><p>Choose your role and work through the steps. Your selections last while this page is open.</p><div className="incident-switch" role="group" aria-label="Protection checklist audience"><button aria-pressed={audience==='visitor'} onClick={()=>setAudience('visitor')}>Everyday visitor</button><button aria-pressed={audience==='owner'} onClick={()=>setAudience('owner')}>Website owner</button></div><p className="incident-progress" aria-live="polite">{done} / {steps.length} steps marked · self-check only</p></div><div className="incident-checklist">{steps.map(([title,body],i)=><label key={audience+i}><input type="checkbox" checked={!!checked[audience+i]} onChange={e=>setChecked({...checked,[audience+i]:e.target.checked})}/><span><b>{title}</b><span>{body}</span></span><small>0{i+1}</small></label>)}<p>Checklist completion is not a security assessment. Q-SHIELD’s TLS scan provides observations; it does not certify immunity to this incident.</p><a href="#scan-console">Inspect your TLS endpoint with Q-SHIELD ↗</a></div></div>
         <details className="incident-context"><summary>What is confirmed—and what remains under investigation?</summary><p>eMudhra acknowledges recoverable intermediate keys and says no customer data was breached. CERT-In’s 21 October advisory says the cited disclosures did not establish malicious exploitation. Potential impersonation should not be presented as a confirmed theft. The company’s investigation and customer transition updates remain ongoing.</p></details>
         <footer className="incident-sources"><span>READ THE PRIMARY SOURCES ↗</span><a href="https://www.cert-in.org.in/s2cMainServlet?CACODE=CICA-2026-3649&amp;pageid=PUBADV01" target="_blank" rel="noopener noreferrer">CERT-In advisory</a><a href="https://emudhra.com/en/post/certificate-security-incident" target="_blank" rel="noopener noreferrer">eMudhra statement · 28 Oct</a><a href="https://blog.mozilla.org/security/2026/10/20/protecting-firefox-users-following-the-compromise-of-emudhra-intermediate-certificates/" target="_blank" rel="noopener noreferrer">Mozilla response</a></footer>
@@ -216,10 +217,17 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
       const [searchQuery, setSearchQuery] = useState('');
       const [sevFilter, setSevFilter] = useState('all');
       const [selectedFinding, setSelectedFinding] = useState(null);
-      useEffect(()=>{
-        if(activeTab==='iac'&&scanData?.metadata?.flow_type==='iac')
-          document.getElementById('findings-console')?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
-      },[scanData,activeTab]);
+      const [resultFocusToken, setResultFocusToken] = useState(0);
+      const resultsRef = React.useRef(null);
+      useEffect(() => {
+        if (!resultFocusToken) return;
+        const frame = requestAnimationFrame(() => {
+          resultsRef.current?.focus({preventScroll:true});
+          resultsRef.current?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});
+        });
+        return () => cancelAnimationFrame(frame);
+      }, [resultFocusToken]);
+      const showReport = data => { setScanData(data); setResultFocusToken(n=>n+1); };
 
       // Load initial demo on startup
       useEffect(() => {
@@ -243,14 +251,14 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
               repo: scanFlow === 'tls' ? null : repo.trim() || null,
               scan_type: scanFlow,
               scenario,
-              deep: deepTls,
-              ignore_comments: ignoreComments,
-              quantum_only: quantumOnly
+              deep: ['tls','full'].includes(scanFlow) && deepTls,
+              ignore_comments: ['code','full'].includes(scanFlow) && ignoreComments,
+              quantum_only: ['code','full'].includes(scanFlow) && quantumOnly
             })
           });
           const data = await res.json();
           if (!res.ok || data.error) throw new Error(data.error || 'Scanner request failed');
-          setScanData(data);
+          showReport(data);
           setSearchQuery('');setSevFilter('all');setConfFilter('all');setActiveTab(scanFlow==='iac'?'iac':'all');
         } catch (err) {
           console.error('Scan execution error:', err);
@@ -395,8 +403,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
           <ScrollNavigation/>
 
           <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-            <QuantumScene loading={loading} total={scanData ? totalAssessments : null} critical={scanData ? sevCounts.critical : null} quantum={scanData ? trackCounts.quantum : null} onDemo={handleLoadDemo}/>
-            <IncidentBrief/>
+            <section id="overview" data-scroll-section className="scan-intro" aria-labelledby="workspace-heading"><div><span className="ops-mono">DISCOVER / ASSESS / PLAN</span><h1 id="workspace-heading">Your cryptography. Your next move.</h1><p>Inspect a repository, infrastructure configuration or TLS endpoint. Review observed evidence, then confirm asset planning assumptions.</p></div><a href="#findings-console">Explore current evidence ↓</a></section>
             <div className="ops-section-label" id="scan-console" data-scroll-section><span><b>01 /</b> SCAN CONFIGURATION</span><span>DEFINE YOUR ATTACK SURFACE ↓</span></div>
             {errorMessage && <div role="alert" className="release-error">{errorMessage}{scanData && <small>The displayed report is from the previous successful request.</small>}</div>}
             {/* Scan Configuration Card */}
@@ -405,7 +412,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                 <div className="release-flows" role="group" aria-label="Scan mode">{[['code','⌘ Repository'],['iac','▤ IaC & Docker'],['tls','◎ TLS endpoint'],['full','◈ Combined']].map(([id,label])=><button key={id} type="button" aria-pressed={scanFlow===id} onClick={()=>setScanFlow(id)} disabled={loading}>{label}</button>)}<span>{scanFlow==='code'?'Only source code will be scanned.':scanFlow==='iac'?'Static repository and infrastructure checks. No live endpoint is tested.':scanFlow==='tls'?'Only the TLS target will be scanned.':'Scan repository and TLS target together.'}</span></div>
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
                   {/* Host Target */}
-                  <div className="md:col-span-5 space-y-1.5">
+                  {['tls','full'].includes(scanFlow) && <div className="md:col-span-5 space-y-1.5">
                     <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
                       <span className="flex items-center space-x-1">
                         <span>◎</span>
@@ -416,7 +423,8 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                     <div className="flex space-x-2">
                       <input
                         type="text"
-                        placeholder="e.g. google.com or badssl.com"
+                        aria-label="Remote target hostname or URL"
+                        placeholder="e.g. example.com"
                         value={host}
                         disabled={['code','iac'].includes(scanFlow)}
                         onChange={(e) => setHost(e.target.value)}
@@ -442,10 +450,10 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                       <span>•</span>
                       <button type="button" onClick={() => setHost('offline-test.local')} className="hover:text-amber-400 hover:underline">simulate-fail</button>
                     </div>
-                  </div>
+                  </div>}
 
                   {/* Local Repo Target */}
-                  <div className="md:col-span-4 space-y-1.5">
+                  {scanFlow !== 'tls' && <div className="md:col-span-4 space-y-1.5">
                     <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
                       <span className="flex items-center space-x-1">
                         <span>⌘</span>
@@ -469,7 +477,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                       <span>•</span>
                       <button type="button" onClick={() => setRepo('.')} className="hover:text-teal-400 hover:underline">current repo (.)</button>
                     </div>
-                  </div>
+                  </div>}
 
                   {/* CRQC Scenario */}
                   <div className="md:col-span-3 space-y-1.5">
@@ -478,24 +486,25 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                       <span>CRQC Planning Scenario</span>
                     </label>
                     <select
+                      aria-label="CRQC planning scenario"
                       value={scenario}
                       onChange={(e) => setScenario(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-teal-500 transition"
                     >
-                      <option value="conservative">Conservative (10y to Quantum Break)</option>
-                      <option value="central">Central (15y - Standard Baseline)</option>
-                      <option value="relaxed">Relaxed (25y - Extended Horizon)</option>
+                      <option value="conservative">Conservative (10-year assumed horizon)</option>
+                      <option value="central">Central (15-year assumed horizon)</option>
+                      <option value="relaxed">Relaxed (25-year assumed horizon)</option>
                     </select>
                   </div>
                 </div>
 
                 {/* Scan Options & Action Buttons */}
                 <div className="pt-2 flex flex-wrap items-center justify-between border-t border-slate-800/80 gap-3">
-                  <div className="flex items-center space-x-5 text-xs text-slate-400">
+                  <details className="scan-options"><summary>Optional scan settings</summary><div className="flex items-center space-x-5 text-xs text-slate-400">
                     <label className="flex items-center space-x-1.5 cursor-pointer hover:text-slate-200">
                       <input
                         type="checkbox"
-                        disabled={scanFlow==='iac'} checked={scanFlow==='iac'?false:deepTls}
+                        disabled={!['tls','full'].includes(scanFlow)} checked={['tls','full'].includes(scanFlow)?deepTls:false}
                         onChange={(e) => setDeepTls(e.target.checked)}
                         className="rounded border-slate-700 bg-slate-950 text-teal-500 focus:ring-0"
                       />
@@ -504,7 +513,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                     <label className="flex items-center space-x-1.5 cursor-pointer hover:text-slate-200">
                       <input
                         type="checkbox"
-                        disabled={scanFlow==='iac'} checked={scanFlow==='iac'?false:ignoreComments}
+                        disabled={scanFlow==='iac'||scanFlow==='tls'} checked={['iac','tls'].includes(scanFlow)?false:ignoreComments}
                         onChange={(e) => setIgnoreComments(e.target.checked)}
                         className="rounded border-slate-700 bg-slate-950 text-teal-500 focus:ring-0"
                       />
@@ -513,13 +522,13 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                     <label className="flex items-center space-x-1.5 cursor-pointer hover:text-slate-200">
                       <input
                         type="checkbox"
-                        disabled={scanFlow==='iac'} checked={scanFlow==='iac'?false:quantumOnly}
+                        disabled={['iac','tls'].includes(scanFlow)} checked={['iac','tls'].includes(scanFlow)?false:quantumOnly}
                         onChange={(e) => setQuantumOnly(e.target.checked)}
                         className="rounded border-slate-700 bg-slate-950 text-teal-500 focus:ring-0"
                       />
                       <span>Quantum-Only Filter</span>
                     </label>
-                  </div>
+                  </div></details>
 
                   <div className="flex items-center space-x-3">
                     <button
@@ -567,15 +576,9 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
               </div>
             )}
 
-            {scanData && <div className="release-report-strip" aria-live="polite"><div><span className="release-badge">{scanData.metadata?.is_demo?'DEMO / ILLUSTRATIVE':scanData.metadata?.flow_type?.toUpperCase()||'SCAN REPORT'}</span><span>{scanData.metadata?.scan_finished_at ? new Date(scanData.metadata.scan_finished_at).toLocaleString() : ''}</span><span>{scanData.metadata?.errors?.length?'Partial or failed stages — review diagnostics':'Scan snapshot loaded'}</span></div><div><strong>{readinessScore==null?'N/A':readinessScore+'/100'}</strong><span>{summary.readiness_label || "Readiness undetermined"}<small className="block">Observed scope / not compliance</small></span><button onClick={handleExportMarkdown}>Export Markdown ↓</button></div></div>}
+            {scanData && <section id="results-summary" ref={resultsRef} tabIndex={-1} className="release-report-strip" aria-label="Scan results summary" aria-live="polite"><div><span className="release-badge">{scanData.metadata?.is_demo?'DEMO / ILLUSTRATIVE':scanData.metadata?.flow_type?.toUpperCase()||'SCAN REPORT'}</span><span>{scanData.metadata?.scan_finished_at ? new Date(scanData.metadata.scan_finished_at).toLocaleString() : ''}</span><span>{scanData.metadata?.scan_id} · {scanData.metadata?.flow_type}</span><span>{scanData.metadata?.errors?.length?'Partial or failed stages — review diagnostics':'Scan snapshot loaded'}</span><a href="#findings-console">Review evidence ↓</a></div><div><strong>{readinessScore==null?'N/A':readinessScore+'/100'}</strong><span>{summary.readiness_label || "Readiness undetermined"}<small className="block">Observed scope / not compliance</small></span><button onClick={handleExportMarkdown}>Export Markdown ↓</button></div></section>}
             {scanData && <EvidenceCoverage data={scanData}/>}
-            <VisualIntelligence data={scanData} sevFilter={sevFilter} activeTab={activeTab} searchQuery={searchQuery}
-              onSeverity={s=>{setConfFilter('all');setSevFilter(s);setActiveTab('all');setSearchQuery('');}}
-              onAlgorithm={a=>{setConfFilter('all');setSearchQuery(searchQuery===a?'':a);setActiveTab('all');setSevFilter('all');}}
-              onTrack={t=>{setConfFilter('all');setActiveTab(t);setSevFilter('all');setSearchQuery('');}}
-              onReset={()=>{setActiveTab('all');setSevFilter('all');setSearchQuery('');setConfFilter('all');}}
-              onInspect={setSelectedFinding}/>
-            <CyberExploration data={scanData} onInspect={setSelectedFinding}/>
+            {scanData && <PlanningContext key={scanData.metadata?.scan_id} data={scanData} onUpdated={showReport}/>}
             <div className="ops-section-label" id="findings-console" data-scroll-section><span><b>05 /</b> EVIDENCE EXPLORER</span><span>{filteredAssessments.length} MATCHING FINDINGS</span></div>
             {/* Main Tabs Navigation */}
             <div className="flex items-center justify-between border-b border-slate-800">
@@ -672,7 +675,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
             )}
 
             {['all','quantum','conventional'].includes(activeTab)&&<div className="release-confidence"><label htmlFor="confidence-filter">Evidence confidence</label><select id="confidence-filter" value={confFilter} onChange={e=>setConfFilter(e.target.value)}>{['all','high','medium','low'].map(x=><option value={x} key={x}>{x}</option>)}</select></div>}
-            <EvidenceTools view={activeTab} data={scanData} onInspect={setSelectedFinding} onLoad={d=>{setScanData(d);setHost(d.metadata?.targets?.host||'');setRepo(d.metadata?.targets?.repo||'');setPort(d.metadata?.targets?.port||443);setScanFlow(['code','iac','tls','full'].includes(d.metadata?.flow_type)?d.metadata.flow_type:'full');setActiveTab('all');setSevFilter('all');setConfFilter('all');setSearchQuery('');setErrorMessage('');}}/>
+            <EvidenceTools view={activeTab} data={scanData} onInspect={setSelectedFinding} onLoad={d=>{showReport(d);setHost(d.metadata?.targets?.host||'');setRepo(d.metadata?.targets?.repo||'');setPort(d.metadata?.targets?.port||443);setScanFlow(['code','iac','tls','full'].includes(d.metadata?.flow_type)?d.metadata.flow_type:'full');setActiveTab('all');setSevFilter('all');setConfFilter('all');setSearchQuery('');setErrorMessage('');}}/>
             {activeTab==='iac'&&<IaCEvidence data={scanData} onInspect={setSelectedFinding}/>}
             {/* TAB CONTENT 1, 2, 3: Findings Table */}
             {['all', 'quantum', 'conventional'].includes(activeTab) && (
@@ -744,7 +747,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
             {activeTab === 'tls' && (
               <div className="space-y-4">
                 {scanData?.modules?.tls_scanner ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <><TLSProvenance tls={scanData.modules.tls_scanner}/><div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {/* TLS Connection & Cipher */}
                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 shadow-xl">
                       <h3 className="text-sm font-bold text-slate-200 flex items-center space-x-2 border-b border-slate-800 pb-3">
@@ -770,12 +773,12 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                         </div>
                         <div className="flex justify-between py-1 border-b border-slate-800/60">
                           <span className="text-slate-400">Key Exchange Group</span>
-                          <span className="text-sky-400 font-bold">{scanData.modules.tls_scanner.key_exchange?.group || 'N/A'}</span>
+                          <span className="text-sky-400 font-bold">{scanData.modules.tls_scanner.key_exchange?.group || 'Unknown / not observed'}</span>
                         </div>
                         <div className="flex justify-between py-1 border-b border-slate-800/60">
                           <span className="text-slate-400">Post-Quantum / Hybrid Group</span>
                           <span className={scanData.modules.tls_scanner.key_exchange?.post_quantum_or_hybrid_group ? 'text-teal-400 font-bold' : 'text-slate-400'}>
-                            {scanData.modules.tls_scanner.key_exchange?.post_quantum_or_hybrid_group ? 'YES (PQC Active)' : 'NO (Classical)'}
+                            {scanData.modules.tls_scanner.key_exchange?.post_quantum_or_hybrid_group === true ? 'Observed hybrid / PQ group' : scanData.modules.tls_scanner.key_exchange?.post_quantum_or_hybrid_group === false ? 'Observed classical group' : 'Unknown / not observed'}
                           </span>
                         </div>
                       </div>
@@ -785,7 +788,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 shadow-xl">
                       <h3 className="text-sm font-bold text-slate-200 flex items-center space-x-2 border-b border-slate-800 pb-3">
                         <span>📜</span>
-                        <span>X.509 Certificate Chain & Identity</span>
+                        <span>X.509 Leaf Certificate & Identity</span>
                       </h3>
                       {scanData.modules.tls_scanner.certificate ? (
                         <div className="space-y-2 text-xs font-mono">
@@ -814,7 +817,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                         <p className="text-xs text-slate-500">No certificate parsed or handshake failed.</p>
                       )}
                     </div>
-                  </div>
+                  </div></>
                 ) : (
                   <div className="p-12 text-center text-slate-500 bg-slate-900 rounded-xl border border-slate-800">
                     No TLS scan was executed for this run. Provide a target hostname above to inspect network TLS/PQC posture.
@@ -867,12 +870,23 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                 )}
               </div>
             )}
+            <details className="optional-exploration"><summary>Explore visual intelligence, the globe and planning scenarios</summary>
+            <VisualIntelligence data={scanData} sevFilter={sevFilter} activeTab={activeTab} searchQuery={searchQuery}
+              onSeverity={s=>{setConfFilter('all');setSevFilter(s);setActiveTab('all');setSearchQuery('');}}
+              onAlgorithm={a=>{setConfFilter('all');setSearchQuery(searchQuery===a?'':a);setActiveTab('all');setSevFilter('all');}}
+              onTrack={t=>{setConfFilter('all');setActiveTab(t);setSevFilter('all');setSearchQuery('');}}
+              onReset={()=>{setActiveTab('all');setSevFilter('all');setSearchQuery('');setConfFilter('all');}}
+              onInspect={setSelectedFinding}/>
+            <CyberExploration data={scanData} onInspect={setSelectedFinding}/>
+            <QuantumScene loading={loading} total={scanData ? totalAssessments : null} critical={scanData ? sevCounts.critical : null} quantum={scanData ? trackCounts.quantum : null} onDemo={handleLoadDemo} isDemo={scanData?.metadata?.is_demo}/>
+            </details>
+            <details className="optional-exploration"><summary>Learn from the October 2026 certificate incident</summary><IncidentBrief/></details>
             <footer className="cyber-footer"><a href="#overview">Q-SHIELD <span>↑ BACK TO SURFACE</span></a><p>DISCOVER THE EXPOSURE. DESIGN THE NEXT DEFENSE.</p><span>END OF TRANSMISSION / INNOTECH ’26</span></footer>
           </main>
 
           {/* Finding Detail Modal / Drawer */}
           {selectedFinding && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+            <EvidenceDialog onClose={() => setSelectedFinding(null)}>
               <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-5 shadow-2xl">
                 {/* Modal Header */}
                 <div className="flex items-start justify-between border-b border-slate-800 pb-4">
@@ -883,9 +897,10 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                       </span>
                       <span className="text-xs font-mono text-slate-400">Priority: {selectedFinding.priority?.toFixed(1)}/100</span>
                     </div>
-                    <h3 className="text-lg font-bold text-slate-100">{selectedFinding.title}</h3>
+                    <h3 id="evidence-dialog-title" className="text-lg font-bold text-slate-100">{selectedFinding.title}</h3>
                   </div>
                   <button
+                    autoFocus aria-label="Close evidence inspector"
                     onClick={() => setSelectedFinding(null)}
                     className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center text-sm font-bold transition"
                   >
@@ -967,7 +982,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
                   </button>
                 </div>
               </div>
-            </div>
+            </EvidenceDialog>
           )}
         </div>
       );

@@ -238,11 +238,21 @@ python dashboard.py
 The server prints its local URL (normally `http://localhost:8080`). Use
 `python dashboard.py --no-browser` to start without opening a browser.
 
-- Choose **Repository**, **TLS endpoint**, or **Combined** before scanning. Inputs
+- Start with the scan form on the first desktop screen. Choose **Repository**,
+  **IaC & Docker**, **TLS endpoint**, or **Combined** before scanning. Inputs
   outside the selected mode are ignored. Invalid requests show an inline error;
   the previous report remains visible until a new result arrives.
-- Explore the 3D cryptographic globe, clickable severity and algorithm charts,
-  priority radar, attack-surface schematic, and quantum-horizon sliders.
+- Review the focused results summary and evidence after a scan. Near the evidence,
+  select an asset in **Confirm asset planning context**: defaults are labeled
+  **Assumed**, and only checked/edited values become **User confirmed**. Confirmation
+  updates every inventory finding for that asset, creates a new planning report
+  from the stored evidence, and preserves the previous report on failure.
+- Open the optional exploration below actionable evidence for the 3D globe,
+  clickable severity and algorithm charts, priority radar, attack-surface schematic
+  and quantum-horizon sliders. The incident brief is a separate disclosure.
+- Evidence inspectors support keyboard navigation, Escape to close and focus return.
+  TLS evidence distinguishes the inspected leaf from independent trust/group probes,
+  full-chain inventory that remains unassessed and revocation that is not checked.
 - Use **Cryptographic Inventory** for the observed algorithms and linked evidence,
   **Migration Roadmap** for actions grouped by timeframe, and **History & Compare**
   to reload and compare scans. History holds the last 50 runs in server memory and
@@ -295,7 +305,10 @@ The educational migration demo requires `cryptography>=50` with an ML-KEM-capabl
 
 ## Audit repair scope
 
-The repairs are delivered in reviewable chunks: CI/path portability and regression coverage (21–25); TLS provenance and explicit planning assumptions (15–20); release consistency, local assets and task-focused accessible UI (26–36). Earlier scanner, export and comparison fixes (1–14) remain in place. The local branch is `Aditya-Singh-AIML`. Configured CI is not evidence that remote GitHub Actions ran.
+The repairs are delivered in reviewable chunks: CI/path portability and regression coverage (21–25); TLS provenance and explicit planning assumptions (15–20); release consistency, local assets and task-focused accessible desktop UI (26–36,
+with mobile-specific item 33 excluded at the user’s request). Existing responsive
+CSS is preserved; this repair does not include mobile layout fixes or mobile
+viewport verification. Earlier scanner, export and comparison fixes (1–14) remain in place. The local branch is `Aditya-Singh-AIML`. Configured CI is not evidence that remote GitHub Actions ran.
 
 Source and IaC safe traversal uses POSIX descriptor-relative no-follow opens. An explicitly selected root can be reached through a canonical parent alias, such as macOS temporary paths; symlink entries within the scanned tree remain excluded. Unsupported safe-open platforms report limited coverage rather than silently following links. See [source limits](docs/SOURCE_EVIDENCE.md) and [TLS provenance](docs/TLS_EVIDENCE.md).
 
