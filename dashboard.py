@@ -9,6 +9,7 @@ Serves the modern single-page React dashboard and provides REST API endpoints:
   - GET  /api/history          : Session scan history list
   - GET  /api/history/<scan_id>: Full scan result for a recorded scan
   - POST /api/scan             : Execute validated multi-modal or single-flow scan
+  - POST /api/reassess         : Reassess stored evidence with confirmed business context
   - POST /api/compare          : Defensible before/after cryptographic scan comparison
   - GET  /api/export           : Structured JSON / Markdown export
 
@@ -245,7 +246,7 @@ def record_scan_history(scan_result: Dict[str, Any], flow_type: str = "full") ->
 
     record = {
         "id": scan_id,
-        "timestamp": metadata.get("scan_finished_at") or now_utc.isoformat(),
+        "timestamp": metadata.get("reassessed_at") or metadata.get("scan_finished_at") or now_utc.isoformat(),
         "flow_type": flow_type,
         "target_label": target_summary_label,
         "targets": targets,
@@ -365,7 +366,9 @@ def _get_demo_data() -> Dict[str, Any]:
     else:
         ruleset = RuleSet.load_from_json_string(DEFAULT_RULES_JSON)
 
+    from planning_context import remember_rules, findings_with_context
     engine = RiskEngine(ruleset, scenario="central")
+    result["metadata"]["ruleset_fingerprint"] = remember_rules(ruleset)
     all_findings = []
     all_findings.extend(convert_tls_results_to_findings(mock_tls))
     all_findings.extend(convert_code_results_to_findings(result["modules"]["code_scanner"]))
@@ -373,21 +376,7 @@ def _get_demo_data() -> Dict[str, Any]:
     report = engine.assess(all_findings)
     result["inventory"] = {
         "total_items": len(all_findings),
-        "findings": [
-            {
-                "id": f.id,
-                "asset": f.asset,
-                "algorithm": f.algorithm,
-                "usage": f.usage,
-                "key_bits": f.key_bits,
-                "exposure": f.exposure,
-                "criticality": f.criticality,
-                "evidence_source": f.evidence_source,
-                "location": f.location,
-                "attributes": f.attributes,
-            }
-            for f in all_findings
-        ]
+        "findings": findings_with_context(all_findings, engine.planning)
     }
     result["risk_assessment"] = report.to_dict()
     result["metadata"]["is_demo"] = True
@@ -617,7 +606,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         try:
             body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
             payload = json.loads(body) if body.strip() else {}
-        except (json.JSONDecodeError, UnicodeDecodeError) as err:
+        except (ValueError, UnicodeDecodeError) as err:
             self.send_error_json(400, f"Malformed JSON request body: {err}")
             return
 
@@ -708,6 +697,28 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self.send_json(200, scan_result)
             except Exception as e:
                 self.send_error_json(500, f"Scan execution error: {e}")
+            return
+
+        if path == "/api/reassess":
+            from planning_context import reassess_planning, RulesSnapshotUnavailable
+            if set(payload) - {"scan_id", "overrides"}:
+                self.send_error_json(400, "Only scan_id and overrides are accepted.")
+                return
+            scan_id = payload.get("scan_id")
+            source = get_scan_by_id(scan_id) if isinstance(scan_id, str) and scan_id else None
+            if source is None:
+                self.send_error_json(404, "Stored scan not found or expired.")
+                return
+            try:
+                derived = reassess_planning(source, payload.get("overrides"))
+            except RulesSnapshotUnavailable as error:
+                self.send_error_json(409, str(error))
+                return
+            except ValueError as error:
+                self.send_error_json(400, str(error))
+                return
+            record_scan_history(derived, flow_type="planning_update")
+            self.send_json(200, derived)
             return
 
         # 2. API: Compare Two Scans (Priority 5 & 6)

@@ -187,6 +187,21 @@ def render_markdown(
               '**Unresolved critical findings:** ' + inline(summary.get('unresolved_critical_count')),
               '**Distinct affected assets:** ' + inline(summary.get('affected_asset_counts', {}).get('total')),
               'Posture scores are planning aids, not compliance certification.', '']
+    if meta.get('assessment_type') == 'planning_update':
+        lines += ['**Assessment:** Planning context update; no new cryptographic measurements.',
+                  '**Parent scan:** ' + inline(meta.get('parent_scan_id')),
+                  '**Evidence observed at:** ' + inline(meta.get('evidence_observed_at')),
+                  '**Reassessed at:** ' + inline(meta.get('reassessed_at')), '']
+    lines += ['## Effective planning context', '',
+              'CRQC horizons are conditional planning assumptions, not predicted attack dates.', '',
+              '| Finding / asset | Field | Effective value | Provenance | Rationale |',
+              '| --- | --- | --- | --- | --- |']
+    for finding in scan_result.get('inventory', {}).get('findings', []):
+        for field, entry in finding.get('planning_context', {}).items():
+            lines.append('| ' + ' | '.join(inline(v).replace('<', '&lt;').replace('>', '&gt;') for v in (
+                finding.get('id', '') + ' / ' + finding.get('asset', ''), field,
+                entry.get('value'), entry.get('provenance'), entry.get('rationale'))) + ' |')
+    lines.append('')
     tls = (scan_result.get('modules') or {}).get('tls_scanner')
     if tls:
         lines += ['## TLS observation boundaries', '',

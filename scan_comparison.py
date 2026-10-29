@@ -1,5 +1,6 @@
 """Compare observed evidence without treating narrower scans as remediation."""
 import re
+import json
 
 SEVERITIES = ('critical', 'high', 'medium', 'low', 'info')
 
@@ -120,6 +121,20 @@ def _compatibility_warnings(before, after):
             warnings.append(label + ' lack comparable provenance.')
         elif a[key] != b[key]:
             warnings.append(label + ' differ; observed deltas are not a same-scope result.')
+    def contexts(report):
+        grouped = {}
+        for finding in report.get('inventory', {}).get('findings', []):
+            identity = finding.get('attributes', {}).get('source_identity') or {}
+            if identity.get('relative_path') and identity.get('scope') and identity.get('call'):
+                key = ('source', identity['relative_path'], identity['scope'], identity['call'], finding.get('algorithm'))
+            else:
+                key = ('asset', finding.get('asset'), finding.get('algorithm'), finding.get('usage'))
+            grouped.setdefault(key, set()).add(json.dumps(finding.get('planning_context'), sort_keys=True))
+        return grouped
+    context_a, context_b = contexts(before), contexts(after)
+    changed_context = any(context_a[key] != context_b[key] for key in context_a.keys() & context_b.keys())
+    if changed_context or a.get('assessment_type') == 'planning_update' or b.get('assessment_type') == 'planning_update':
+        warnings.append('Planning context changed or was reassessed; this is not measured remediation.')
     if a.get('is_demo') or b.get('is_demo'):
         warnings.append('Comparison includes illustrative demo data.')
     for report in (before, after):

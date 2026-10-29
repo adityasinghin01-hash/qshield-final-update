@@ -126,7 +126,7 @@ def convert_tls_results_to_findings(tls_data: Dict[str, Any]) -> List[Finding]:
             ))
 
     # The group observation is scoped to its own handshake, never the main one.
-    if kx and kx.get('group_probe_id') and kx.get('probe_group'):
+    if isinstance(kx, dict) and kx.get('group_probe_id') and kx.get('probe_group'):
         group = kx['probe_group']
         identity = mlkem_group(group)
         findings.append(Finding(

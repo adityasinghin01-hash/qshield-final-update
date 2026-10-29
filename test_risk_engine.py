@@ -215,7 +215,8 @@ class TestMoscaTheoremEvaluation(unittest.TestCase):
         a = assessments[0]
         self.assertEqual(a.severity, Severity.CRITICAL)
         self.assertEqual(a.threat_analysis.mosca_delta, 10.0)
-        self.assertIn("Critical HNDL exposure window", a.threat_analysis.details)
+        self.assertIn("Conditional HNDL planning urgency", a.threat_analysis.details)
+        self.assertIn("no attack date is predicted", a.threat_analysis.details)
 
     def test_mosca_high_exposure(self):
         """When 0 < X + Y - Z < 5, severity must be HIGH."""

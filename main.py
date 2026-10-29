@@ -20,8 +20,6 @@ Provides:
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
-import hashlib
 import json
 import io
 import math
@@ -114,6 +112,7 @@ def run_pipeline(
         ruleset.rules.extend(RuleSet.from_dict({'rules': additions}).rules)
         ruleset.version += '+iac-'+CATALOG_VERSION
         ruleset.sha256 = ''  # Source ruleset digest no longer describes the extended set.
+    from planning_context import remember_rules, findings_with_context
     engine = RiskEngine(ruleset, scenario=scenario)
 
     # 2. Execute TLS / Network Scan (Member 1)
@@ -203,7 +202,7 @@ def run_pipeline(
             "targets": target_summary,
             "scenario": scenario,
             "crqc_horizon_years": engine.planning.crqc_years,
-            "ruleset_fingerprint": hashlib.sha256(json.dumps(asdict(ruleset), sort_keys=True, default=str).encode()).hexdigest(),
+            "ruleset_fingerprint": remember_rules(ruleset),
             "scan_options": {"deep_tls": deep_tls, "ignore_comments": ignore_comments,
                              "quantum_only": quantum_only, "iac": iac},
             "errors": errors,
@@ -214,21 +213,7 @@ def run_pipeline(
         },
         "inventory": {
             "total_items": len(all_findings),
-            "findings": [
-                {
-                    "id": f.id,
-                    "asset": f.asset,
-                    "algorithm": f.algorithm,
-                    "usage": f.usage,
-                    "key_bits": f.key_bits,
-                    "exposure": f.exposure,
-                    "criticality": f.criticality,
-                    "evidence_source": f.evidence_source,
-                    "location": f.location,
-                    "attributes": f.attributes,
-                }
-                for f in all_findings
-            ],
+            "findings": findings_with_context(all_findings, engine.planning),
         },
         "risk_assessment": report.to_dict(),
     }
@@ -308,7 +293,7 @@ class TerminalFormatter:
                 conn = tls_mod["connection"]
                 cs = tls_mod.get("cipher_suite", {})
                 kx = tls_mod.get("key_exchange", {})
-                print(f"    └─ Negotiated  : {conn.get('tls_version')} | {cs.get('name')} | Group: {kx.get('group') or 'classical'}")
+                print(f"    └─ Negotiated  : {conn.get('tls_version')} | {cs.get('name')} | Group: {kx.get('group') or 'unknown (inspection group unassessed)'}")
 
         code_mod = result.get("modules", {}).get("code_scanner")
         if code_mod and not code_mod.get("error"):

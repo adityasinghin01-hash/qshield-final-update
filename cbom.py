@@ -500,6 +500,14 @@ def export_cbom(
     if targets_in.get("repo"):
         metadata_props.append({"name": "qshield:target_repo", "value": str(targets_in["repo"])})
 
+    for key in ('parent_scan_id', 'assessment_type', 'evidence_scan_id', 'evidence_observed_at', 'reassessed_at', 'ruleset_fingerprint'):
+        if key in metadata_in:
+            metadata_props.append({"name": "qshield:"+key, "value": str(metadata_in[key])})
+    # Business context is application metadata, never an observed algorithm capability.
+    context = [{"finding_id": item.get("id"), "planning_context": item["planning_context"]}
+               for item in inventory_findings if isinstance(item.get("planning_context"), dict)]
+    if context:
+        metadata_props.append({"name": "qshield:planning_context", "value": json.dumps(context, sort_keys=True)})
     metadata_props.sort(key=lambda p: p["name"])
 
     # 3. Build Components & Track Finding-to-Component Mapping

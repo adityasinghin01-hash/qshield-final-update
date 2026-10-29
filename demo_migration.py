@@ -95,7 +95,7 @@ def run_migration_demo() -> int:
         ("Integrity / Checksum Hash", "MD5 (Broken collision)", "SHA-256 (Collision resistant)"),
         ("Session Token Generation", "SHA-1 (Deprecated)", "secrets.token_hex (CSPRNG)"),
         ("Symmetric Encryption Cipher", "3DES-CBC / AES-128-ECB", "AES-256-GCM (AEAD)"),
-        ("Symmetric Key Quantum Margin", "64-bit (Grover halved)", "128-bit (Quantum resistant)"),
+        ("Symmetric Key Quantum Margin", "AES-128 idealized search model", "AES-256 additional planning margin"),
         ("Asymmetric Key Length", "RSA 1024-bit (Factorable)", "RSA 3072-bit (NIST SP 800-57)"),
         ("Key Exchange Mechanism", "Classical ECDH P-256", "Local X25519 + ML-KEM-768 demo"),
         ("HNDL Quantum Retrospective Risk", "CRITICAL EXPOSURE", "Local round trip verified; transport unassessed"),
@@ -179,10 +179,11 @@ def run_migration_demo() -> int:
     print("     - Records supported cryptographic source syntax; absence of a finding is not proof of safety.")
     print("     - Identified supported conventional and quantum observations; review the actual report counts.")
     print("     - A lack of matched rules does not establish absence of flaws; review coverage and remaining asymmetric exposure.")
-    print("  2. LIVE RUNTIME VERIFICATION:")
-    print("     - Proves remediated code does not merely compile, but executes correct cryptography.")
+    print("  2. LOCAL FUNCTIONAL RUNTIME CHECKS:")
+    print("     - No authenticated transport, deployment security or compliance certification.")
+    print("     - Exercises local functional roundtrips and selected tamper checks.")
     print("     - Successfully executed encryption, decryption, authentication tag checking,")
-    print("       and constant-time password hash comparison dynamically.")
+    print("       and password hash comparisons dynamically; timing behavior is not measured.")
     print("=" * 80 + "\n")
 
     return 0

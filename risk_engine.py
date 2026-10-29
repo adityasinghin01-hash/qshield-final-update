@@ -194,17 +194,17 @@ DEFAULT_RULES_JSON = r"""
     {
       "id": "AES128_QUANTUM_REDUCTION",
       "track": "quantum",
-      "title": "AES-128 Effective Security Halved by Grover's Algorithm",
+      "title": "AES-128 Long-Term Quantum Planning Margin",
       "match": {
         "family": "aes",
         "key_bits": 128
       },
       "severity_model": "symmetric_quantum",
-      "rationale": "Grover's search algorithm provides a quadratic speedup for brute-force key search, reducing the effective security of AES-128 from 128 bits to approximately 64 bits.",
-      "quantum_relevance": "Grover's algorithm provides a square-root speedup ($O(\\sqrt{N})$), making 128-bit symmetric keys borderline for ultra-high-assurance or classified workloads.",
+      "rationale": "Idealized Grover search has square-root query scaling; AES-128 quantum margin is a planning consideration, not evidence of a current practical break.",
+      "quantum_relevance": "Practical advantage depends on serial work, error correction and hardware costs, with limited parallelization. NIST currently permits AES-128, AES-192 and AES-256.",
       "recommendation": {
-        "action": "Upgrade symmetric encryption from AES-128 to AES-256 for long-term confidentiality.",
-        "reason": "AES-256 maintains a comfortable 128-bit quantum security margin against Grover's algorithm, satisfying post-quantum security requirements (e.g., NSA CNSA 2.0).",
+        "action": "Consider AES-256 for additional long-term confidentiality margin according to the asset policy.",
+        "reason": "AES-256 offers greater idealized key-search margin; this recommendation alone does not establish implementation security or compliance.",
         "alternatives": [
           "AES-256-GCM",
           "ChaCha20-Poly1305 (256-bit)"
@@ -214,18 +214,18 @@ DEFAULT_RULES_JSON = r"""
     {
       "id": "AES256_QUANTUM_SAFE",
       "track": "quantum",
-      "title": "AES-256 Symmetric Cipher is Quantum-Resistant",
+      "title": "AES-256 Offers Increased Key-Search Margin",
       "match": {
         "family": "aes",
         "key_bits": 256
       },
       "severity_model": "static",
       "severity": "info",
-      "rationale": "AES-256 provides 256 bits of classical security and 128 bits of post-quantum security against Grover's algorithm, which exceeds all foreseeable quantum computational brute-force bounds.",
-      "quantum_relevance": "Quantum-resistant. Grover's algorithm reduces 256 bits to 128 bits of security, which is computationally infeasible to break.",
+      "rationale": "Idealized Grover key search for AES-256 has query scaling near 2^128; actual attack costs depend on hardware and fault-tolerant execution.",
+      "quantum_relevance": "No practical quantum break is established here. Correct mode, key management and implementation remain essential.",
       "recommendation": {
         "action": "Retain AES-256 as the symmetric encryption standard; ensure it is deployed in AEAD modes (such as GCM).",
-        "reason": "AES-256 meets NIST and NSA CNSA 2.0 requirements for post-quantum symmetric confidentiality.",
+        "reason": "A correctly implemented AEAD mode and key management are still required; this observation does not certify compliance.",
         "alternatives": []
       }
     },
@@ -1412,13 +1412,13 @@ class RiskEngine:
                     sev = Severity.CRITICAL
                     details = (
                         f"Mosca's Theorem: Data lifetime X ({X}y) + Migration Y ({Y}y) = {mosca_sum}y exceeds "
-                        f"CRQC horizon Z ({Z}y) by {delta:.1f}y. Critical HNDL exposure window."
+                        f"assumed CRQC horizon Z ({Z}y) by {delta:.1f}y. Conditional HNDL planning urgency; no attack date is predicted."
                     )
                 elif delta > 0:
                     sev = Severity.HIGH
                     details = (
                         f"Mosca's Theorem: X+Y ({mosca_sum}y) exceeds CRQC horizon Z ({Z}y) by {delta:.1f}y. "
-                        f"Adversaries harvesting today will decrypt sensitive data in year {Z}."
+                        "Harvested ciphertext could remain sensitive if a capable quantum adversary emerges within this assumed horizon."
                     )
                 elif (Z - mosca_sum) <= 3.0:
                     sev = Severity.MEDIUM
@@ -1430,7 +1430,7 @@ class RiskEngine:
                     sev = Severity.LOW
                     details = (
                         f"Mosca's Theorem: X+Y ({mosca_sum}y) is within CRQC Z ({Z}y) with comfortable safety margin "
-                        f"of {Z - mosca_sum:.1f}y."
+                        f"of {Z - mosca_sum:.1f}y under the assumed scenario; this does not establish cryptographic safety."
                     )
                 threat = ThreatAnalysis(
                     model="hndl",
@@ -1443,7 +1443,7 @@ class RiskEngine:
             else:
                 sev = Severity.MEDIUM
                 details = (
-                    f"Data lifetime unspecified. Defaulting to MEDIUM severity floor under central scenario (Z={Z}y). "
+                    f"Data lifetime unspecified. Applying a MEDIUM planning floor under the assumed {self.planning.scenario} scenario (Z={Z}y). "
                     f"Recommend auditing data retention policies."
                 )
                 threat = ThreatAnalysis(
@@ -1464,13 +1464,13 @@ class RiskEngine:
                     sev = Severity.CRITICAL
                     details = (
                         f"Signature trust validity T ({T}y) outlives CRQC horizon Z ({Z}y). "
-                        f"Artifacts/certificates will remain active and vulnerable to real-time quantum forgery."
+                        "If a capable quantum adversary emerges within this assumed horizon, active artifacts may face forgery risk."
                     )
                 elif total_trust > Z:
                     sev = Severity.HIGH
                     details = (
                         f"Trust validity T ({T}y) + Migration Y ({Y}y) = {total_trust}y exceeds CRQC horizon Z ({Z}y). "
-                        f"Migration cannot complete before quantum risk materializes."
+                        "The planning model indicates a migration timing gap under the assumed horizon; it does not predict quantum arrival."
                     )
                 else:
                     sev = Severity.MEDIUM
@@ -1509,12 +1509,13 @@ class RiskEngine:
             if bits <= 128:
                 sev = Severity.MEDIUM
                 details = (
-                    f"Grover's algorithm reduces {bits}-bit symmetric key to {effective_q_bits:.0f}-bit effective quantum security. "
-                    f"Insufficient for classified or multi-decade confidentiality."
+                    f"Idealized Grover key search has roughly 2^{effective_q_bits:.0f} oracle-query scaling for a {bits}-bit key. "
+                    "Practical benefit depends on serial depth, error correction and hardware cost; parallelization is limited. "
+                    "This is a planning margin, not evidence AES-128 is currently broken; NIST permits AES-128/192/256."
                 )
             else:
                 sev = Severity.INFO
-                details = f"Key length {bits} bits provides {effective_q_bits:.0f}-bit quantum security under Grover's algorithm (quantum safe)."
+                details = f"A {bits}-bit key has idealized Grover query scaling near 2^{effective_q_bits:.0f}; practical costs are substantial and implementation/mode remain relevant."
             threat = ThreatAnalysis(model="symmetric_quantum", details=details)
 
         else:
@@ -1706,7 +1707,7 @@ class Report:
             "# Cryptographic Risk & Migration Assessment Report",
             "",
             f"**Engine Version:** `{ENGINE_VERSION}` | **Ruleset Version:** `{self.ruleset_version}` | "
-            f"**Planning Scenario:** `{self.planning.scenario.title()}` (CRQC Horizon: **{self.planning.crqc_years:.0f} years**)",
+            f"**Planning Scenario:** `{self.planning.scenario.title()}` (Assumed CRQC Horizon: **{self.planning.crqc_years:.0f} years**; not an attack-date prediction)",
             "",
             "## Executive Summary",
             "",

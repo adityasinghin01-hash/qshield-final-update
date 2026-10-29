@@ -162,7 +162,8 @@ class TestDashboardServerAPI(unittest.TestCase):
             with urllib.request.urlopen(req) as resp:
                 return resp.status, resp.read().decode("utf-8"), resp.headers
         except urllib.error.HTTPError as e:
-            return e.code, e.read().decode("utf-8"), e.headers
+            with e:
+                return e.code, e.read().decode("utf-8"), e.headers
 
     def _post(self, path: str, payload: dict):
         data = json.dumps(payload).encode("utf-8")
@@ -176,7 +177,8 @@ class TestDashboardServerAPI(unittest.TestCase):
             with urllib.request.urlopen(req) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            return e.code, json.loads(e.read().decode("utf-8"))
+            with e:
+                return e.code, json.loads(e.read().decode("utf-8"))
 
     def test_health_endpoint(self):
         status, body, headers = self._get("/api/health")

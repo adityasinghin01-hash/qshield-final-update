@@ -6,6 +6,8 @@ This document provides the official Project Lead release checklist, end-to-end a
 
 ## 📋 Release Readiness Checklist
 
+These original checklist entries predate the current audit and do not establish current release status. Use the current audit report and fresh local/CI evidence for release decisions.
+
 | Category | Item | Verification Command / Check | Lead Status |
 | :--- | :--- | :--- | :--- |
 | **Git Safety** | Current branch verification | `git branch` $\rightarrow$ must be on `member/lead` or `integration` | ✅ **VERIFIED** |
@@ -17,7 +19,7 @@ This document provides the official Project Lead release checklist, end-to-end a
 | **Fault Tolerance** | Graceful Network Recovery | `python main.py --host invalid-offline-target.test` continues cleanly | ✅ **VERIFIED** |
 | **Track Separation**| Defensible Track Separation | Track A (Quantum) isolated from Track B (Conventional) | ✅ **VERIFIED** |
 | **Recommendations**| Cryptographic Alignment | Key Exchange $\rightarrow$ ML-KEM; Signatures $\rightarrow$ ML-DSA; Passwords $\rightarrow$ Argon2id | ✅ **VERIFIED** |
-| **Migration Proof**| Controlled Migration Demo | `python demo_migration.py` proves risk elimination & runtime execution | ✅ **VERIFIED** |
+| **Migration Proof**| Controlled Migration Demo | `python demo_migration.py` exercises local functional behavior; it does not prove risk elimination | ✅ **VERIFIED** |
 | **Interactive UI** | Lightweight React Dashboard | `python main.py --dashboard` starts cleanly on `http://localhost:8080` | ✅ **VERIFIED** |
 | **CI / CD Gate** | GitHub Actions Workflow | `.github/workflows/qshield-ci.yml` syntax check & test matrix (Py 3.11, 3.12) | ✅ **VERIFIED** |
 | **Governance** | CODEOWNERS & Branch Policy | `.github/CODEOWNERS` and `docs/BRANCH_POLICY.md` aligned | ✅ **VERIFIED** |
@@ -28,7 +30,7 @@ This document provides the official Project Lead release checklist, end-to-end a
 
 ```
 [Layer 1: Multi-Modal Discovery]
-  ├─ tls_scanner.py (Member 1)      -> Live TLS 1.0-1.3 handshake, cipher suite, cert chain, PQC hybrid groups
+  ├─ tls_scanner.py (Member 1)      -> Per-probe TLS observations, cipher suite, leaf certificate, scoped group evidence
   └─ code_scanner.py (Member 1)     -> Static AST & regex scanner for Python, JS/TS crypto calls & secrets
 
 [Layer 2: Orchestration & Normalization]
@@ -50,7 +52,7 @@ This document provides the official Project Lead release checklist, end-to-end a
 ### Key Architectural Differentiators
 1. **Multi-Modal Synthesis**: Unifies network TLS telemetry with source code AST discoveries into a single unified risk score.
 2. **Defensible Dual-Track Separation**: Avoids the fatal trap of proposing quantum algorithms for classical implementation flaws.
-3. **Mathematical Threat Modeling**: Implements Michele Mosca's Theorem ($X + Y > Z$) and Grover's search complexity reduction ($O(\sqrt{N})$) rather than arbitrary CVSS guessing.
+3. **Mathematical Threat Modeling**: Uses Mosca's planning inequality ($X + Y > Z$) with explicit assumptions and distinguishes idealized Grover query complexity from practical attack feasibility.
 4. **Zero-Overhead Web Delivery**: The interactive React 18 dashboard requires **zero npm/node runtime dependencies**, running entirely from the Python standard library `http.server`.
 
 ---
@@ -59,24 +61,24 @@ This document provides the official Project Lead release checklist, end-to-end a
 
 ### Q1: What is Mosca's Theorem, and why does Harvest-Now-Decrypt-Later (HNDL) make quantum migration urgent today?
 > **Answer**:
-> Michele Mosca formulated the theorem: **If $X + Y > Z$, then your data will be compromised before you can protect it.**
+> Mosca's planning inequality compares the confidentiality lifetime ($X$) plus migration time ($Y$) with an assumed quantum capability horizon ($Z$). **If $X + Y > Z$, the selected scenario indicates a timing gap requiring migration planning.** It is not proof of compromise.
 > - **$X$ (Shelf-Life / Confidentiality Lifetime)**: How many years the data must remain confidential (e.g., healthcare records: 30 years; state secrets: 25-50 years).
-> - **$Y$ (Migration Time)**: How many years it takes to re-architect systems, upgrade standards, replace hardware, and deploy quantum-resistant algorithms (typically 3–7 years).
-> - **$Z$ (CRQC Horizon)**: Number of years until adversaries build a Cryptanalytically Relevant Quantum Computer (estimated between 10 and 25 years).
+> - **$Y$ (Migration Time)**: Assumed duration to inventory, re-architect, replace dependencies and deploy the selected migration. An asset owner can confirm this value, including zero.
+> - **$Z$ (CRQC Horizon)**: An assumed Cryptanalytically Relevant Quantum Computer horizon for scenario planning. The bundled 10/15/25-year scenarios are not forecasts or predicted attack dates.
 > 
-> Because nation-states and adversaries are actively **harvesting encrypted traffic today** and storing it in data centers, any data with $X + Y > Z$ is already vulnerable under the Harvest-Now-Decrypt-Later (HNDL) threat model. Key exchange mechanisms (ECDH, DH, RSA-OAEP) must migrate to hybrid post-quantum KEMs (NIST FIPS 203 ML-KEM) immediately.
+> Under Harvest-Now-Decrypt-Later (HNDL), captured ciphertext may be decrypted later if a sufficiently capable quantum adversary emerges while the data remains sensitive. $X + Y > Z$ signals planning urgency under the chosen assumptions. Public-key key establishment still needs a PQC migration plan; urgency depends on retention, exposure, criticality and migration time. Defaults are marked assumed; confirmed business context changes planning, not the original TLS/static evidence.
 
 ---
 
 ### Q2: How does Shor's algorithm differ from Grover's algorithm in its impact on cryptography?
 > **Answer**:
-> - **Shor's Algorithm (Exponential Speedup - Completely Breaks Public-Key Cryptography)**:
+> - **Shor's Algorithm (Threat to Widely Used Public-Key Schemes)**:
 >   - Solves integer factorization and discrete logarithms in **polynomial time** ($O((\log N)^3)$).
->   - Completely breaks RSA, ECDSA, Ed25519, Diffie-Hellman, and ECDH. Increasing RSA key sizes to 4096 or 8192 bits offers no meaningful quantum resistance; Shor's algorithm scales easily. Complete migration to lattice-based or hash-based algorithms (FIPS 203, 204, 205) is required.
-> - **Grover's Algorithm (Quadratic Speedup - Halves Effective Symmetric Key Bits)**:
+>   - On a sufficiently capable fault-tolerant quantum computer, threatens RSA, ECDSA, Ed25519, Diffie-Hellman and ECDH. Increasing classical key sizes does not provide a PQC migration strategy. Current deployments should inventory and plan migration to suitable standardized PQC algorithms.
+> - **Grover's Algorithm (Idealized Quadratic Query Speedup)**:
 >   - Searches unsorted databases of size $N$ in $O(\sqrt{N})$ operations.
->   - Reduces AES-128 effective security from 128 bits to approximately 64 bits (borderline vulnerable to massive distributed quantum clusters).
->   - Reduces AES-256 effective security to 128 bits, which remains computationally infeasible to brute-force for the foreseeable future. Therefore, **AES-256 is quantum-resistant**.
+>   - For an idealized AES-128 key-search oracle, query scaling is roughly $2^{64}$. Serial depth, fault tolerance, hardware costs and limited parallelization constrain practical benefit; this is not a current practical break.
+>   - AES-256 increases the idealized search margin to roughly $2^{128}$ queries. NIST currently permits AES-128, AES-192 and AES-256; quantum margin alone does not establish secure deployment or mandate universal key doubling. See the [NIST PQC migration FAQ](https://csrc.nist.gov/projects/post-quantum-cryptography/faqs).
 
 ---
 
@@ -107,7 +109,7 @@ This document provides the official Project Lead release checklist, end-to-end a
 ### Q5: How does Q-SHIELD distinguish static evidence from live runtime verification?
 > **Answer**:
 > - **Static Evidence**: Extracted by our AST and regex code scanner. It identifies the presence of an API call or syntax construct in the codebase (e.g., `ec.generate_private_key()`), but cannot guarantee whether that code branch executes in production. Static findings receive a confidence score based on syntax specificity.
-> - **Live Runtime Verification**: Verified by dynamic execution. In network discovery, `tls_scanner.py` conducts a live TLS socket handshake against the server, proving which cipher suite and key exchange group the server *actually negotiates*. In our controlled migration demo (`demo_migration.py`), we execute live encryption, decryption, authentication tag verification, and constant-time password comparisons dynamically to prove functional correctness.
+> - **Live Runtime Verification**: Verified by dynamic execution. In network discovery, `tls_scanner.py` records the negotiated cipher and any observed group with per-probe provenance. Separate probes may reach different peers; an unavailable group remains unknown. In our controlled migration demo (`demo_migration.py`), we execute local encryption/decryption roundtrips, tag rejection and password checks. The hybrid demo exercises local two-party agreement and ciphertext tamper rejection; it does not verify authenticated transport, timing behavior, production security or compliance.
 
 ---
 
