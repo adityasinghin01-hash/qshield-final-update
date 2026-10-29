@@ -159,7 +159,15 @@ def python_events(content, rules):
 
     def lookup(name, context):
         scope = scope_of(context)
+        # Python methods do not close over a class namespace. A class-local
+        # import cannot establish an unqualified alias inside its methods.
+        skip_class_namespace = not isinstance(scope, ast.ClassDef)
+        inaccessible_binding = False
         while True:
+            if isinstance(scope, ast.ClassDef) and skip_class_namespace:
+                inaccessible_binding |= name in tables.get(scope, {})
+                scope = scope_of(scope)
+                continue
             entries = tables.get(scope, {}).get(name)
             if entries:
                 if len(entries) != 1:
@@ -169,7 +177,7 @@ def python_events(content, rules):
                     return None, 'uncertain'
                 return (value, kind, node), 'bound'
             if scope is tree:
-                return None, 'unbound'
+                return None, 'uncertain' if inaccessible_binding else 'unbound'
             scope = scope_of(scope)
 
     def full_name(node, context, seen=()):

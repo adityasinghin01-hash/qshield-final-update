@@ -118,6 +118,7 @@ class AuditSource(unittest.TestCase):
             'import hashlib as h\ndef h(): pass\nh.md5(b"x")',
             'import hashlib as h\nh.md5 = user_value\nh.md5(b"x")',
             'import hashlib as h\nh["md5"] = user_value\nh.md5(b"x")',
+            'class C:\n    import hashlib as h\n    def f(self):\n        h.md5(b"x")',
         ]
         for source in cases:
             with self.subTest(source=source):
