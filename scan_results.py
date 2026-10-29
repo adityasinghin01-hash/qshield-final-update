@@ -187,6 +187,21 @@ def render_markdown(
               '**Unresolved critical findings:** ' + inline(summary.get('unresolved_critical_count')),
               '**Distinct affected assets:** ' + inline(summary.get('affected_asset_counts', {}).get('total')),
               'Posture scores are planning aids, not compliance certification.', '']
+    tls = (scan_result.get('modules') or {}).get('tls_scanner')
+    if tls:
+        lines += ['## TLS observation boundaries', '',
+                  'Independent handshakes can reach different peers or negotiate different parameters. A matching leaf fingerprint does not establish the same connection.', '']
+        for key, value in (tls.get('coverage') or {}).items():
+            lines.append('- '+inline(key)+': '+inline(value))
+        for probe in tls.get('probes', []):
+            lines.append('- '+inline(probe.get('stage'))+' / '+inline(probe.get('outcome'))+
+                         ' / correlation '+inline(probe.get('correlation_to_inspection'))+
+                         ' / '+inline(probe.get('error_category'))+' / probe '+inline(probe.get('id')))
+        enumeration = tls.get('cipher_enumeration')
+        if enumeration:
+            lines += ['', '**TLS 1.2 candidate enumeration:** '+inline(enumeration.get('status'))+
+                      ' ('+inline(enumeration.get('attempted_count'))+' / '+inline(enumeration.get('candidate_count'))+' attempted)']
+        lines.append('')
     code = (scan_result.get('modules') or {}).get('code_scanner')
     if code:
         coverage = code.get('coverage', {})

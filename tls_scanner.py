@@ -41,6 +41,9 @@ import socket
 import ssl
 import subprocess
 import sys
+import time
+import uuid
+import warnings
 from typing import Any
 
 try:
@@ -125,8 +128,13 @@ def _make_context(verify: bool, version: str | None = None,
             ctx.set_ciphers("ALL:@SECLEVEL=0")
         except ssl.SSLError:
             pass
-        ctx.minimum_version = tv
-        ctx.maximum_version = tv
+        # Offering obsolete versions is intentional inspection, not our client
+        # policy. Silence only Python's expected warning at these assignments.
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', message=r'ssl\.TLSVersion\.TLSv1(_1)? is deprecated',
+                                    category=DeprecationWarning)
+            ctx.minimum_version = tv
+            ctx.maximum_version = tv
     if ciphers:
         ctx.set_ciphers(ciphers)
     return ctx
@@ -139,6 +147,59 @@ def _connect(host: str, port: int, ctx: ssl.SSLContext, timeout: float):
     except Exception:
         raw.close()
         raise
+
+
+def _probe_record(host, port, stage, implementation='Python ssl', version=None):
+    return dict(id=uuid.uuid4().hex, stage=stage, timestamp=_now().isoformat(),
+                endpoint={'host': host, 'port': port}, peer_address=None,
+                certificate_fingerprint_sha256=None,
+                client={'implementation': implementation,
+                        'version': version or (sys.version.split()[0] + ' / ' + ssl.OPENSSL_VERSION)
+                        if implementation == 'Python ssl' else version},
+                status='unknown', outcome='unknown', error_category=None,
+                attribution='independent_handshake', correlation_to_inspection='unknown')
+
+
+def _observe_socket(record, sock):
+    record['peer_address'] = sock.getpeername()[0]
+    der = sock.getpeercert(binary_form=True)
+    if der:
+        record['certificate_fingerprint_sha256'] = hashlib.sha256(der).hexdigest()
+    record.update(status='completed', outcome='accepted')
+    return der
+
+
+def _failure_category(error, local=False):
+    """Only explicit peer negotiation alerts establish a remote refusal."""
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        return 'timeout'
+    if local or isinstance(error, (AttributeError, ValueError)):
+        return 'local_unsupported'
+    if isinstance(error, ssl.SSLError):
+        reason = (str(getattr(error, 'reason', '') or '') + ' ' + str(error)).upper()
+        if any(token in reason for token in ('NO_PROTOCOLS_AVAILABLE', 'NO PROTOCOLS AVAILABLE',
+                                             'NO_CIPHERS_AVAILABLE', 'NO CIPHERS AVAILABLE',
+                                             'UNSUPPORTED_PROTOCOL', 'NO_SUITABLE_SIGNATURE_ALGORITHM')):
+            return 'local_unsupported'
+        if any(token in reason for token in ('TLSV1_ALERT_PROTOCOL_VERSION',
+                                             'SSLV3_ALERT_HANDSHAKE_FAILURE',
+                                             'TLSV1_ALERT_INSUFFICIENT_SECURITY')):
+            return 'remote_negotiation_refused'
+        return 'tls_error'
+    return 'transport_error'
+
+
+def _record_failure(record, error, local=False):
+    category = _failure_category(error, local)
+    record.update(status='completed' if category == 'remote_negotiation_refused' else 'unknown',
+                  outcome='rejected' if category == 'remote_negotiation_refused' else 'unknown',
+                  error_category=category)
+
+
+def _correlate(record, inspection):
+    left, right = (record.get('certificate_fingerprint_sha256'),
+                   inspection.get('certificate_fingerprint_sha256'))
+    record['correlation_to_inspection'] = ('matched' if left == right else 'mismatched') if left and right else 'unknown'
 
 
 # --------------------------------------------------------------------------
@@ -310,33 +371,58 @@ def _openssl_probe(host: str, port: int, timeout: float,
                    version_flag: str | None = None) -> dict[str, Any]:
     """Best-effort: ask the local `openssl s_client` which key-exchange group
     was actually used. Gives e.g. 'X25519', 'secp256r1', 'X25519MLKEM768'."""
+    res = _probe_record(host, port, 'key_exchange', 'OpenSSL CLI')
     exe = shutil.which("openssl")
+    res['available'] = bool(exe)
     if not exe:
-        return {"available": False}
-    cmd = [exe, "s_client", "-connect", f"{host}:{port}"]
+        res['error_category'] = 'client_unavailable'
+        return res
+    address = f"[{host}]:{port}" if ':' in host else f"{host}:{port}"
+    cmd = [exe, "s_client", "-connect", address, "-showcerts"]
     if not re.fullmatch(r"[\d.]+", host) and ":" not in host:
         cmd += ["-servername", host]
     if version_flag:
         cmd.append(version_flag)
     try:
-        p = subprocess.run(cmd, check=False, input=b"", capture_output=True, timeout=timeout + 5)
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return {"available": True, "error": f"{type(e).__name__}: {e}"}
+        version = subprocess.run([exe, 'version'], check=False, capture_output=True, timeout=min(timeout, 2))
+        text = version.stdout.decode('utf-8', 'replace').strip()
+        if re.fullmatch(r'(?:OpenSSL|LibreSSL) [A-Za-z0-9. +()_-]{1,100}', text):
+            res['client']['version'] = text
+        p = subprocess.run(cmd, check=False, input=b"", capture_output=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        _record_failure(res, error)
+        return res
     out = (p.stdout + p.stderr).decode("utf-8", "replace")
-    res: dict[str, Any] = {"available": True}
-    m = re.search(r"Server Temp Key:\s*([^,\n]+)(?:,\s*([^\n]+))?", out)
-    if m:
-        res["server_temp_key"] = m.group(1).strip()
-        res["server_temp_key_detail"] = (m.group(2) or "").strip() or None
-    m = re.search(r"Negotiated TLS1\.3 group:\s*(\S+)", out)
-    if m:
-        res["negotiated_group"] = m.group(1)
-    m = re.search(r"Peer signature type:\s*(\S+)", out)
-    if m:
-        res["peer_signature_type"] = m.group(1)
-    m = re.search(r"Peer signing digest:\s*(\S+)", out)
-    if m:
-        res["peer_signing_digest"] = m.group(1)
+    # s_client prints leaf first. Retain only its fingerprint, never PEM/output.
+    pem = re.search(r'-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----', out)
+    if pem:
+        try:
+            der = ssl.PEM_cert_to_DER_cert(pem.group(0))
+            res['certificate_fingerprint_sha256'] = hashlib.sha256(der).hexdigest()
+        except (ValueError, ssl.SSLError):
+            pass
+    peer = re.search(r'Connecting to ([0-9a-fA-F:.]+)', out)
+    if peer:
+        import ipaddress
+        try:
+            res['peer_address'] = str(ipaddress.ip_address(peer.group(1)))
+        except ValueError:
+            pass
+    patterns = {
+        'server_temp_key': r'Server Temp Key:\s*([A-Za-z0-9_.+-]{1,80})',
+        'server_temp_key_detail': r'Server Temp Key:[^,\n]+,\s*([0-9]{1,6} bits)',
+        'negotiated_group': r'Negotiated TLS1\.3 group:\s*([A-Za-z0-9_.+-]{1,80})',
+        'peer_signature_type': r'Peer signature type:\s*([A-Za-z0-9_.+-]{1,80})',
+        'peer_signing_digest': r'Peer signing digest:\s*([A-Za-z0-9_.+-]{1,80})',
+    }
+    for key, pattern in patterns.items():
+        match = re.search(pattern, out)
+        if match:
+            res[key] = match.group(1)
+    if p.returncode == 0 and (res.get('negotiated_group') or res.get('server_temp_key')):
+        res.update(status='completed', outcome='accepted')
+    else:
+        res['error_category'] = 'group_unreported' if p.returncode == 0 else 'client_failed'
     return res
 
 
@@ -347,7 +433,8 @@ def _key_exchange_section(cipher: dict[str, Any], probe: dict[str, Any]) -> dict
     kx = cipher.get("key_exchange") or ""
     is_13 = cipher.get("protocol") == "TLSv1.3"
     ephemeral = is_13 or kx.startswith(("ECDHE", "DHE", "any"))
-    group = probe.get("negotiated_group") or probe.get("server_temp_key")
+    group = ((probe.get("negotiated_group") or probe.get("server_temp_key"))
+             if probe.get('outcome') == 'accepted' else None)
     detail = probe.get("server_temp_key_detail")
     pq = None
     if group:
@@ -376,48 +463,87 @@ def _key_exchange_section(cipher: dict[str, Any], probe: dict[str, Any]) -> dict
 # Protocol / cipher enumeration
 # --------------------------------------------------------------------------
 
-def probe_protocol_versions(host: str, port: int, timeout: float) -> dict[str, bool | None]:
-    """True = accepted, False = rejected by server, None = could not be tested
-    (e.g. local OpenSSL refuses to offer that version)."""
-    result: dict[str, bool | None] = {}
+def probe_protocol_versions(host: str, port: int, timeout: float, *, detailed=False):
+    """Compatibility bool/None mapping; detailed=True also retains each handshake."""
+    supported, probes = {}, []
     for label, attr in _PROTOCOLS:
+        record = _probe_record(host, port, 'protocol')
+        record['protocol'] = label
+        probes.append(record)
         try:
             ctx = _make_context(verify=False, version=attr)
-        except (AttributeError, ValueError, ssl.SSLError):
-            result[label] = None
+        except (AttributeError, ValueError, ssl.SSLError) as error:
+            _record_failure(record, error, local=True)
+            supported[label] = None
             continue
         try:
-            with _connect(host, port, ctx, timeout) as s:
-                result[label] = (s.version() == label)
-        except ssl.SSLError as e:
-            # "no protocols available" => local side cannot offer it
-            result[label] = None if "no protocols available" in str(e).lower() else False
-        except (OSError, ValueError):
-            result[label] = None
-    return result
+            with _connect(host, port, ctx, timeout) as sock:
+                _observe_socket(record, sock)
+                actual = sock.version()
+                # Python calls TLS 1.0 "TLSv1".
+                if actual != label and not (label == 'TLSv1.0' and actual == 'TLSv1'):
+                    record.update(outcome='unknown', status='unknown', error_category='unexpected_protocol')
+        except (OSError, ValueError) as error:
+            _record_failure(record, error)
+        supported[label] = {'accepted': True, 'rejected': False}.get(record['outcome'])
+    return {'supported': supported, 'probes': probes} if detailed else supported
 
 
-def enumerate_tls12_ciphers(host: str, port: int, timeout: float) -> list[dict[str, Any]]:
-    """Try each TLS 1.2 suite individually (~dozens of connections)."""
-    base = _make_context(verify=False, version="TLSv1_2")
-    accepted = []
-    for c in base.get_ciphers():
-        if c.get("protocol") not in ("TLSv1.2", "TLSv1.0", "SSLv3"):
-            continue
-        name = c["name"]
+def enumerate_tls12_ciphers(host: str, port: int, timeout: float, *, detailed=False,
+                            max_attempts=64, total_timeout=30.0):
+    """Bounded local-candidate TLS 1.2 inspection, not all possible suites.
+
+    The default remains the accepted list. detailed=True includes unknowns,
+    explicit peer refusals, candidate coverage and independent observations.
+    """
+    result = dict(status='partial', accepted=[], attempts=[], candidate_names=[],
+                  candidate_count=0, attempted_count=0, unknown_count=0,
+                  accepted_count=0, rejected_count=0, error_category=None,
+                  scope='local_client_tls12_candidates',
+                  settings={'max_attempts': min(max(0, max_attempts), 64),
+                            'total_timeout_seconds': min(max(0.0, total_timeout), 30.0)})
+    deadline = time.monotonic() + result['settings']['total_timeout_seconds']
+    try:
+        base = _make_context(verify=False, version='TLSv1_2')
+        candidates = {c['name']: c for c in base.get_ciphers()
+                      if c.get('protocol') in ('TLSv1.2', 'TLSv1.0', 'SSLv3')}
+    except (AttributeError, ValueError, ssl.SSLError) as error:
+        result['error_category'] = _failure_category(error, local=True)
+        return result if detailed else result['accepted']
+    result['candidate_names'] = sorted(candidates)
+    result['candidate_count'] = len(candidates)
+    for name in result['candidate_names']:
+        remaining = deadline - time.monotonic()
+        if len(result['attempts']) >= result['settings']['max_attempts'] or remaining <= 0:
+            result['error_category'] = 'budget_exhausted'
+            break
+        record = _probe_record(host, port, 'cipher_enumeration')
+        record['cipher_name'] = name
+        result['attempts'].append(record)
         try:
-            ctx = _make_context(verify=False, version="TLSv1_2", ciphers=f"{name}:@SECLEVEL=0")
-            with _connect(host, port, ctx, timeout) as s:
-                if s.cipher()[0] == name:
-                    accepted.append({
-                        "name": name,
-                        "key_exchange": _KEA_MAP.get(c.get("kea"), c.get("kea")),
-                        "authentication": (c.get("auth") or "").replace("auth-", ""),
-                        "bits": c.get("strength_bits"),
-                    })
-        except (ssl.SSLError, OSError, ValueError):
+            ctx = _make_context(verify=False, version='TLSv1_2', ciphers=f'{name}:@SECLEVEL=0')
+        except (AttributeError, ValueError, ssl.SSLError) as error:
+            _record_failure(record, error, local=True)
             continue
-    return accepted
+        try:
+            with _connect(host, port, ctx, min(timeout, remaining)) as sock:
+                _observe_socket(record, sock)
+                if sock.version() != 'TLSv1.2' or sock.cipher()[0] != name:
+                    record.update(status='unknown', outcome='unknown', error_category='unexpected_negotiation')
+                else:
+                    c = candidates[name]
+                    result['accepted'].append({'name': name,
+                        'key_exchange': _KEA_MAP.get(c.get('kea'), c.get('kea')),
+                        'authentication': (c.get('auth') or '').replace('auth-', ''),
+                        'bits': c.get('strength_bits'), 'probe_id': record['id']})
+        except (OSError, ValueError) as error:
+            _record_failure(record, error)
+    result['attempted_count'] = len(result['attempts'])
+    for outcome in ('accepted', 'rejected', 'unknown'):
+        result[outcome + '_count'] = sum(p['outcome'] == outcome for p in result['attempts'])
+    if result['attempted_count'] == result['candidate_count'] and not result['unknown_count'] and candidates:
+        result['status'] = 'complete'
+    return result if detailed else result['accepted']
 
 
 # --------------------------------------------------------------------------
@@ -456,12 +582,17 @@ def scan_tls(host: str, port: int | None = None, timeout: float = 8.0,
         "certificate_validation": None,
         "supported_protocols": None,
         "supported_tls12_ciphers": None,
+        "probes": [], "cipher_enumeration": None,
+        "coverage": {"certificate_inspection": "leaf_only", "system_trust": "separate_handshake",
+                     "full_chain_inventory": "unassessed", "revocation": "not_checked"},
     }
     if not _HAVE_CRYPTO:
         result["errors"].append({"stage": "init", "error":
             "The 'cryptography' package is required: pip install cryptography"})
         return result
 
+    inspection = _probe_record(host, port, 'inspection')
+    result['probes'].append(inspection)
     # 1) Main handshake (unverified, so we can still inspect bad certs)
     try:
         ctx = _make_context(verify=False)
@@ -472,21 +603,10 @@ def scan_tls(host: str, port: int | None = None, timeout: float = 8.0,
                 "ip_address": s.getpeername()[0],
             }
             result["cipher_suite"] = _cipher_details(s, ctx)
-            der = s.getpeercert(binary_form=True)
-    except socket.gaierror as e:
-        result["errors"].append({"stage": "dns", "error": f"Cannot resolve host: {e}"})
-        return result
-    except TimeoutError:
-        result["errors"].append({"stage": "connect", "error": f"Timed out after {timeout}s"})
-        return result
-    except ConnectionRefusedError:
-        result["errors"].append({"stage": "connect", "error": "Connection refused (port closed?)"})
-        return result
-    except ssl.SSLError as e:
-        result["errors"].append({"stage": "handshake", "error": f"TLS handshake failed: {e}"})
-        return result
-    except OSError as e:
-        result["errors"].append({"stage": "connect", "error": f"{type(e).__name__}: {e}"})
+            der = _observe_socket(inspection, s)
+    except (OSError, ValueError) as error:
+        _record_failure(inspection, error)
+        result["errors"].append({"stage": "inspection", "error": inspection['error_category']})
         return result
 
     result["scan_status"] = "ok"
@@ -496,46 +616,84 @@ def scan_tls(host: str, port: int | None = None, timeout: float = 8.0,
         result["certificate"] = parse_certificate(der)
     except Exception as e:
         result["scan_status"] = "partial"
-        result["errors"].append({"stage": "certificate", "error": f"{type(e).__name__}: {e}"})
+        result["errors"].append({"stage": "certificate", "error": "leaf_certificate_parse_failed"})
 
-    # 3) Chain validation against the system trust store (separate handshake)
+    # 3) System trust validation uses an independent handshake.
+    trust = _probe_record(host, port, 'system_trust')
+    result['probes'].append(trust)
     try:
         vctx = _make_context(verify=True)
-        with _connect(host, port, vctx, timeout):
+        with _connect(host, port, vctx, timeout) as sock:
+            _observe_socket(trust, sock)
             result["certificate_validation"] = {"trusted": True, "error": None}
     except ssl.SSLCertVerificationError as e:
-        result["certificate_validation"] = {"trusted": False, "error": e.verify_message}
-    except (ssl.SSLError, OSError) as e:
-        result["certificate_validation"] = {"trusted": None, "error": f"Could not validate: {e}"}
+        trust.update(status="completed", outcome="rejected", error_category="certificate_verification_failed")
+        result["certificate_validation"] = {"trusted": False, "error": "System trust or hostname verification failed"}
+    except (OSError, ValueError) as e:
+        _record_failure(trust, e)
+        result["certificate_validation"] = {"trusted": None, "error": "System trust validation inconclusive"}
 
     # 4) Key-exchange details
-    probe = {"available": False}
+    _correlate(trust, inspection)
+    result['certificate_validation'].update(probe_id=trust['id'], correlation_to_inspection=trust['correlation_to_inspection'])
+    probe = _probe_record(host, port, 'key_exchange', 'OpenSSL CLI')
+    probe.update(available=False, error_category='not_requested')
     if use_openssl:
         probe = _openssl_probe(host, port, timeout)
     result["key_exchange"] = _key_exchange_section(result["cipher_suite"], probe)
-    result["key_exchange"]["openssl_probe"] = probe
+    _correlate(probe, inspection)
+    result['probes'].append(probe)
+    kx = result['key_exchange']
+    kx.update(group_probe_id=probe['id'], probe_group=kx['group'],
+              probe_post_quantum_or_hybrid_group=kx['post_quantum_or_hybrid_group'],
+              correlation_to_inspection=probe['correlation_to_inspection'])
+    # Even the same leaf can negotiate another group on another connection.
+    kx.update(group=None, group_detail=None, post_quantum_or_hybrid_group=None,
+              group_source=None, inspection_probe_id=inspection['id'],
+              note='Exact group belongs to a separate OpenSSL handshake; the inspection group is unassessed.')
+    kx['openssl_probe'] = probe
     if use_openssl and not probe.get("available"):
         result["errors"].append({"stage": "key_exchange", "error":
             "openssl CLI not found; exact key-exchange group and PQ status remain unknown"})
 
     # 5) Supported protocol versions
     try:
-        result["supported_protocols"] = probe_protocol_versions(host, port, timeout)
+        protocol_result = probe_protocol_versions(host, port, timeout, detailed=True)
+        result['supported_protocols'] = protocol_result['supported']
+        for entry in protocol_result['probes']:
+            _correlate(entry, inspection)
+        result['probes'].extend(protocol_result['probes'])
         inconclusive = [name for name, accepted in result['supported_protocols'].items() if accepted is None]
         if inconclusive:
             result['scan_status'] = 'partial'
             result['errors'].append({'stage': 'protocol_probe', 'error': 'Inconclusive protocol tests: '+', '.join(inconclusive)})
     except Exception as e:  # defensive
         result["scan_status"] = "partial"
-        result["errors"].append({"stage": "protocol_probe", "error": f"{type(e).__name__}: {e}"})
+        result["errors"].append({"stage": "protocol_probe", "error": "protocol_probe_failed"})
 
     # 6) Optional TLS 1.2 cipher enumeration
     if deep:
         try:
-            result["supported_tls12_ciphers"] = enumerate_tls12_ciphers(host, port, timeout)
+            enumeration = enumerate_tls12_ciphers(host, port, timeout, detailed=True)
+            result['cipher_enumeration'] = enumeration
+            result['supported_tls12_ciphers'] = enumeration['accepted']
+            for entry in enumeration['attempts']:
+                _correlate(entry, inspection)
+            result['probes'].extend(enumeration['attempts'])
+            if enumeration['status'] != 'complete':
+                result['scan_status'] = 'partial'
+                result['errors'].append({'stage':'cipher_enum', 'error':'TLS 1.2 candidate enumeration incomplete; unknown outcomes are not rejections.'})
         except Exception as e:
             result["scan_status"] = "partial"
-            result["errors"].append({"stage": "cipher_enum", "error": f"{type(e).__name__}: {e}"})
+            result["errors"].append({"stage": "cipher_enum", "error": "cipher_enumeration_failed"})
+
+    for entry in result['probes'][1:]:
+        if entry['outcome'] == 'unknown' or (entry['outcome'] == 'accepted' and
+                entry['correlation_to_inspection'] != 'matched'):
+            result['scan_status'] = 'partial'
+            result['errors'].append({'stage': entry['stage'], 'probe_id': entry['id'],
+                                     'error': entry['error_category'] or
+                                     'identity_correlation_' + entry['correlation_to_inspection']})
 
     return result
 

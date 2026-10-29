@@ -81,6 +81,7 @@ def convert_tls_results_to_findings(tls_data: Dict[str, Any]) -> List[Finding]:
                     "signature_algorithm": cert.get("signature", {}).get("algorithm"),
                     "serial_number": cert.get("serial_number"),
                     "fingerprint_sha256": cert.get("fingerprint_sha256") or (cert.get("fingerprints") or {}).get("sha256"),
+                    "inspection_scope": "leaf_only",
                     "likely_purpose": "TLS Server Authentication & Public Key Certificate",
                     "confidence": "HIGH",
                     "match_type": "X509_CERTIFICATE",
@@ -116,11 +117,28 @@ def convert_tls_results_to_findings(tls_data: Dict[str, Any]) -> List[Finding]:
                     "is_pqc_hybrid": is_pqc,
                     "pqc_identity": identity[0] if identity else None,
                     "openssl_probe": kx.get("openssl_probe", {}),
+                    "probe_id": kx.get('inspection_probe_id'),
+                    "attribution": 'inspection_handshake' if kx.get('inspection_probe_id') else 'legacy_unspecified',
                     "likely_purpose": identity[0] if identity else ("Static RSA key transport; no forward secrecy" if "RSA" in kx_algo else "Session key agreement; inspect group evidence"),
                     "confidence": "HIGH" if group else "MEDIUM",
                     "match_type": "TLS_HANDSHAKE_PROBE" if group else "TLS_HANDSHAKE_INFERENCE",
                 }
             ))
+
+    # The group observation is scoped to its own handshake, never the main one.
+    if kx and kx.get('group_probe_id') and kx.get('probe_group'):
+        group = kx['probe_group']
+        identity = mlkem_group(group)
+        findings.append(Finding(
+            id=f"tls-group-probe-{host}", asset=asset_id+'#key-exchange-probe',
+            algorithm=_normalize_tls_kx_algo(group, '', bool(identity)), usage='key_exchange',
+            data_lifetime_years=10.0, migration_years=3.0, exposure='internet', criticality='high',
+            evidence_source='network', location='Independent OpenSSL key-exchange probe',
+            attributes={'evidence_type':'tls_group_probe', 'probe_id':kx['group_probe_id'],
+                'group':group, 'is_pqc_hybrid':bool(identity),
+                'pqc_identity':identity[0] if identity else None,
+                'correlation_to_inspection':kx.get('correlation_to_inspection'),
+                'attribution':'independent_handshake', 'confidence':'HIGH'}))
 
     # 3. Bulk Symmetric Cipher Suite Finding
     cipher = tls_data.get("cipher_suite")
@@ -213,6 +231,7 @@ def convert_tls_results_to_findings(tls_data: Dict[str, Any]) -> List[Finding]:
                 algorithm=algorithm, usage='symmetric_encryption', key_bits=suite.get('bits'),
                 exposure='internet', criticality='high', evidence_source='network',
                 attributes={'evidence_type': 'tls_accepted_cipher', 'cipher_suite_name': name,
+                            'probe_id': suite.get('probe_id'), 'attribution': 'independent_handshake',
                             'confidence': 'HIGH', 'match_type': 'TLS_CIPHER_ENUMERATION'}))
     return findings
 

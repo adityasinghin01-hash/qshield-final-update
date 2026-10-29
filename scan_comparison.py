@@ -35,9 +35,26 @@ def _validate_report(report):
                 raise ValueError('Infrastructure observations must be objects.')
         if module == 'tls_scanner':
             for field in ('connection', 'cipher_suite', 'certificate', 'certificate_validation',
-                          'key_exchange', 'supported_protocols'):
+                          'key_exchange', 'supported_protocols', 'cipher_enumeration'):
                 if field in scan and scan[field] is not None and not isinstance(scan[field], dict):
                     raise ValueError('TLS ' + field + ' must be an object or null.')
+            probes = scan.get('probes', [])
+            enumeration = scan.get('cipher_enumeration') or {}
+            for records in (probes, enumeration.get('attempts', [])):
+                if not isinstance(records, list) or any(not isinstance(p, dict) for p in records):
+                    raise ValueError('TLS probe records must be arrays of objects.')
+                for probe in records:
+                    for field in ('endpoint', 'client'):
+                        if field in probe and not isinstance(probe[field], dict):
+                            raise ValueError('TLS probe ' + field + ' must be an object.')
+            names = enumeration.get('candidate_names', [])
+            if not isinstance(names, list) or any(not isinstance(n, str) for n in names):
+                raise ValueError('TLS candidate names must be strings.')
+            if 'settings' in enumeration and not isinstance(enumeration['settings'], dict):
+                raise ValueError('TLS enumeration settings must be an object.')
+            for field in ('candidate_count', 'attempted_count', 'unknown_count', 'accepted_count', 'rejected_count'):
+                if field in enumeration and (type(enumeration[field]) is not int or enumeration[field] < 0):
+                    raise ValueError('TLS enumeration counts must be nonnegative integers.')
     for field in ('severity', 'track'):
         values = summary.get(field, {})
         if not isinstance(values, dict) or any(type(n) is not int or n < 0 for n in values.values()):
@@ -145,9 +162,11 @@ def _compatibility_warnings(before, after):
             if left.get('scan_status') != 'ok' or right.get('scan_status') != 'ok':
                 warnings.append('TLS inspection is incomplete.')
             for field in ('connection', 'cipher_suite', 'certificate', 'certificate_validation',
-                          'key_exchange', 'supported_protocols', 'supported_tls12_ciphers'):
+                          'key_exchange', 'supported_protocols'):
                 if bool(left.get(field)) != bool(right.get(field)):
                     warnings.append('TLS ' + field.replace('_', ' ') + ' evidence is missing from one scan.')
+            if (left.get('supported_tls12_ciphers') is None) != (right.get('supported_tls12_ciphers') is None):
+                warnings.append('TLS cipher enumeration evidence is missing from one scan.')
             for field in ('connection', 'certificate', 'certificate_validation', 'key_exchange'):
                 a_fields = set(left.get(field) or {})
                 b_fields = set(right.get(field) or {})
@@ -163,9 +182,38 @@ def _compatibility_warnings(before, after):
             if any(type(value) is not bool for protocols in (protocols_a, protocols_b)
                    for value in (protocols or {}).values()):
                 warnings.append('TLS protocol probe results include unresolved outcomes.')
+            if 'probes' in left or 'probes' in right:
+                def probe_scope(scan):
+                    return sorted((p.get('stage', ''), p.get('protocol', ''), p.get('cipher_name', ''),
+                                   str(p.get('client', {})), str(p.get('endpoint', {})))
+                                  for p in scan.get('probes', []))
+                if probe_scope(left) != probe_scope(right) or not left.get('probes'):
+                    warnings.append('TLS independent probe coverage differs or is unavailable.')
+                for scan in (left, right):
+                    if any(p.get('outcome') not in ('accepted', 'rejected') or
+                           (p.get('stage') != 'inspection' and p.get('outcome') == 'accepted'
+                            and p.get('correlation_to_inspection') != 'matched')
+                           for p in scan.get('probes', [])):
+                        warnings.append('TLS independent probe outcomes or identity correlation are unresolved.')
             if a.get('scan_options', {}).get('deep_tls') or b.get('scan_options', {}).get('deep_tls'):
-                warnings.append('Deep TLS cipher probing lacks complete per-probe outcome provenance.')
+                enums = [scan.get('cipher_enumeration') or {} for scan in (left, right)]
+                if any(not _complete_enumeration(e) for e in enums):
+                    warnings.append('Deep TLS candidate coverage is incomplete or unknown.')
+                if any(enums[0].get(k) != enums[1].get(k) for k in ('candidate_names','candidate_count','settings','scope')):
+                    warnings.append('Deep TLS candidate scope differs.')
     return list(dict.fromkeys(warnings))
+
+
+def _complete_enumeration(enumeration):
+    """Complete means actual conclusive attempts over every recorded candidate."""
+    names = enumeration.get('candidate_names', [])
+    attempts = enumeration.get('attempts', [])
+    return (enumeration.get('status') == 'complete' and bool(names)
+            and enumeration.get('candidate_count') == len(names) == len(set(names))
+            and enumeration.get('attempted_count') == len(attempts) == len(names)
+            and {p.get('cipher_name') for p in attempts} == set(names)
+            and all(p.get('outcome') in ('accepted', 'rejected') for p in attempts)
+            and enumeration.get('unknown_count') == 0)
 
 
 def compare_scans(baseline_scan, current_scan):
