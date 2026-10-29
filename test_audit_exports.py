@@ -73,6 +73,16 @@ class FormalValidationTests(unittest.TestCase):
         self.assertIsNone(valid)
         self.assertTrue(reason)
 
+    def test_schema_annotations_are_data_not_references(self):
+        for annotation in ({'$ref': 'https://example.invalid/literal'}, {'$id': None, '$ref': 42}):
+            with self.subTest(annotation=annotation), tempfile.TemporaryDirectory() as folder:
+                schema = Path(folder)/'schema.json'
+                schema.write_text(json.dumps({'$schema': 'http://json-schema.org/draft-07/schema#',
+                                             'type': 'object', 'default': annotation,
+                                             'examples': [annotation]}))
+                valid, reason = cbom.validate_cbom_schema(self.bom, schema)
+                self.assertIs(valid, True, reason)
+
     def test_malformed_serial_number_is_invalid_not_exception(self):
         valid, error = cbom.validate_cbom_schema({**self.bom, 'serialNumber': None})
         self.assertIs(valid, False)

@@ -742,15 +742,27 @@ def validate_cbom_schema(
         schema_resources.append((schema, schema_uri))
 
         def check_references(node, base):
-            if isinstance(node, dict):
-                base = urljoin(base, node.get('$id', ''))
-                if '$ref' in node:
-                    registry.resolver(base_uri=base).lookup(node['$ref'])
-                for value in node.values():
-                    check_references(value, base)
-            elif isinstance(node, list):
-                for value in node:
-                    check_references(value, base)
+            if not isinstance(node, dict):
+                return
+            base = urljoin(base, node.get('$id', ''))
+            if '$ref' in node:
+                registry.resolver(base_uri=base).lookup(node['$ref'])
+            # Only Draft 7 schema locations are traversed. Annotation values
+            # (default, examples, enum, const) are arbitrary instance data.
+            for key in ('definitions', 'properties', 'patternProperties', 'dependencies'):
+                for child in node.get(key, {}).values():
+                    if isinstance(child, (dict, bool)):
+                        check_references(child, base)
+            for key in ('additionalProperties', 'additionalItems', 'contains',
+                        'propertyNames', 'not', 'if', 'then', 'else'):
+                if key in node:
+                    check_references(node[key], base)
+            items = node.get('items', [])
+            for child in items if isinstance(items, list) else [items]:
+                check_references(child, base)
+            for key in ('allOf', 'anyOf', 'oneOf'):
+                for child in node.get(key, []):
+                    check_references(child, base)
 
         # Check the whole resource set, including unused definitions/optional
         # branches. Formal success requires a self-contained schema graph.
