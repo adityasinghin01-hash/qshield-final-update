@@ -211,6 +211,10 @@ class AuditSource(unittest.TestCase):
         params = self.active(report)[0]['attributes']['parameters']
         self.assertEqual(params['iterations'], 600000)
         self.assertEqual(params['kdf_assessment']['status'], 'adequate')
+        self.assertEqual(params['kdf_assessment']['assessment_scope'], 'explicit_cost_only')
+        self.assertEqual(params['kdf_assessment']['salt_status'], 'unknown')
+        self.assertTrue(params['kdf_assessment']['unknown_reasons'])
+        self.assertIsNone(report['risk_assessment']['summary']['readiness_score'])
         for args in ["'sha256', password, salt", "'sha256', password, salt, caller_cost", "digest, password, salt, 600000"]:
             with self.subTest(args=args):
                 report = self.scan('import hashlib\nhashlib.pbkdf2_hmac(' + args + ')')

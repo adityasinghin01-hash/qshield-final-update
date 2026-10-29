@@ -22,7 +22,10 @@ are inside the selected repository. Unsupported platforms fail closed rather
 than falling back to following paths. Source code is parsed, never executed.
 
 Normalized findings preserve safe `attributes.parameters` and their shared
-`kdf_assessment` (`status`, `reasons`, `unknown_reasons`, `policy_source`). Only
+`kdf_assessment` (`status`, `assessment_scope`, `salt_status`, `reasons`,
+`unknown_reasons`, `policy_source`). Its status assesses explicit cost only. Salt
+generation, uniqueness and runtime handling remain explicitly unknown, including
+when the cost status is adequate; this prevents a perfect full posture. Only
 explicit, bounded non-secret settings are extracted. KDF snippets omit all
 password/salt arguments. Missing or dynamic digest/cost/salt-derived settings,
 unsupported variants, and unobserved library defaults remain unknown. Explicit

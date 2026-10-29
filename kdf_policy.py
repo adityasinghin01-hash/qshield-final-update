@@ -61,4 +61,7 @@ def assess_kdf(algorithm, parameters):
     else:
         reasons.append('scrypt parameter policy is not implemented; review settings')
     return dict(status='weak' if weak else 'unknown' if reasons else 'adequate',
-                reasons=weak + reasons, unknown_reasons=reasons, policy_source=POLICY_SOURCE)
+                assessment_scope='explicit_cost_only', salt_status='unknown',
+                reasons=weak + reasons,
+                unknown_reasons=reasons + ['Salt generation, uniqueness and runtime handling are not assessed by the static cost policy'],
+                policy_source=POLICY_SOURCE)
