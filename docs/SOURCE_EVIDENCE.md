@@ -70,6 +70,21 @@ a full JS/TS parser; shadowed, reassigned, conditional or dynamic evidence is
 not assumed to establish a crypto namespace. Reflection, runtime settings,
 interprocedural flow and arbitrary library defaults are not resolved.
 
+Literal reference chains resolve each AST value in the lexical scope of its
+original binding. Only the immediate class namespace participates in a class
+body lookup; methods and nested classes skip enclosing class namespaces, while
+enclosing function closures remain eligible. Pattern captures invalidate import
+aliases. Literal resolution permits at most 4,096 bytes/characters, checks the
+total result length before multiplying, and bounds integers to signed 63-bit
+magnitude. Numeric cost slots use integer-only resolution, so byte/string cost
+expressions are never expanded. JS destructuring, repeated/conditional bindings
+and shadowed `require` provenance are conservatively unresolved.
+
+Parameter sanitization applies before normalization can incorporate values into
+algorithm labels. Numeric parameter fields accept bounded integers only;
+digest/mode/curve/variant fields accept their supported enumerated spellings.
+Arbitrary strings and booleans do not survive under numeric or enumerated keys.
+
 TLS certificate normalization preserves the scanner's `fingerprint_sha256`
 field (and its legacy nested representation when provided). Missing fingerprints
 remain missing.

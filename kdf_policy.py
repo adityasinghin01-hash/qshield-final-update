@@ -5,17 +5,22 @@ https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
 An adequate explicit cost is a scoped observation, not a password-storage audit.
 """
 POLICY_SOURCE = 'https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html'
-SAFE_PARAMETERS = {'key_bits', 'curve', 'mode', 'iterations', 'digest', 'rounds',
-                   'memory_cost', 'time_cost', 'parallelism', 'variant'}
+NUMERIC_PARAMETERS = {'key_bits', 'iterations', 'rounds', 'memory_cost', 'time_cost', 'parallelism'}
+ENUM_PARAMETERS = {
+    'digest': {'sha1', 'sha256', 'sha512'},
+    'curve': {'P-256', 'P-384', 'P-521'},
+    'mode': {'GCM', 'CBC', 'ECB', 'CTR', 'CCM', 'CFB', 'OFB'},
+    'variant': {'argon2id', 'argon2i', 'argon2d'},
+}
 
 
 def safe_parameters(parameters):
     """Whitelist non-secret scalar settings, even across adapter boundaries."""
     if not isinstance(parameters, dict):
         return {}
-    return {k: v for k, v in parameters.items() if k in SAFE_PARAMETERS
-            and ((type(v) is int and abs(v) <= 2**63-1)
-                 or (isinstance(v, str) and len(v) <= 64))}
+    return {k: v for k, v in parameters.items()
+            if (k in NUMERIC_PARAMETERS and type(v) is int and abs(v) <= 2**63-1)
+            or (k in ENUM_PARAMETERS and type(v) is str and v in ENUM_PARAMETERS[k])}
 
 
 def assess_kdf(algorithm, parameters):

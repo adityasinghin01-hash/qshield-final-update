@@ -10,22 +10,46 @@ import re
 import tokenize
 
 
-def _literal(node, bindings, depth=0):
+_MAX_LITERAL_LENGTH = 4096
+_MAX_LITERAL_INTEGER = 2**63 - 1
+
+
+def _literal(node, bindings, depth=0, expected=None):
+    """Resolve bounded literals; reject multiplication before allocating its result.
+
+    A callable binding resolver evaluates each reference in its own AST scope.
+    Numeric consumers request int so byte/string expressions are never expanded.
+    """
     if depth > 8:
         return None
     if isinstance(node, ast.Name):
-        return _literal(bindings.get(node.id), bindings, depth + 1)
+        if callable(bindings):
+            return bindings(node, depth + 1, expected)
+        return _literal(bindings.get(node.id), bindings, depth + 1, expected)
     if isinstance(node, ast.Constant):
-        return node.value
+        value = node.value
+        if expected is not None and type(value) is not expected:
+            return None
+        if type(value) is int and abs(value) <= _MAX_LITERAL_INTEGER:
+            return value
+        if isinstance(value, (str, bytes)) and len(value) <= _MAX_LITERAL_LENGTH:
+            return value
+        return None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)) and expected in (None, int):
+        value = _literal(node.operand, bindings, depth+1, int)
+        return (-value if isinstance(node.op, ast.USub) else value) if value is not None else None
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
-        a, b = _literal(node.left, bindings, depth+1), _literal(node.right, bindings, depth+1)
-        if isinstance(a, (str, bytes)) and type(b) is int and 0 <= b <= 4096:
+        a = _literal(node.left, bindings, depth+1, expected)
+        b = _literal(node.right, bindings, depth+1, int)
+        if isinstance(a, (str, bytes)) and type(b) is int and 0 <= b <= _MAX_LITERAL_LENGTH and len(a) * b <= _MAX_LITERAL_LENGTH:
             return a * b
-    if isinstance(node, ast.Call):
+        if type(a) is int and type(b) is int and abs(a) <= _MAX_LITERAL_INTEGER // max(1, abs(b)):
+            return a * b
+    if isinstance(node, ast.Call) and expected is None:
         name = ast.unparse(node.func)
         if name in ('os.urandom', 'secrets.token_bytes') and node.args:
-            size = _literal(node.args[0], bindings, depth+1)
-            if type(size) is int and 0 <= size <= 4096:
+            size = _literal(node.args[0], bindings, depth+1, int)
+            if type(size) is int and 0 <= size <= _MAX_LITERAL_LENGTH:
                 return b'\0' * size
     return None
 
@@ -153,6 +177,10 @@ def python_events(content, rules):
             bind(scope, node.arg, None, node, 'argument')
         elif isinstance(node, ast.ExceptHandler) and node.name:
             bind(scope, node.name, None, node, 'exception')
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            bind(scope, node.name, None, node, 'pattern_capture')
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bind(scope, node.rest, None, node, 'pattern_capture')
         elif isinstance(node, (ast.Global, ast.Nonlocal)):
             for name in node.names:
                 bind(scope, name, None, node, 'scope_mutation')
@@ -161,10 +189,10 @@ def python_events(content, rules):
         scope = scope_of(context)
         # Python methods do not close over a class namespace. A class-local
         # import cannot establish an unqualified alias inside its methods.
-        skip_class_namespace = not isinstance(scope, ast.ClassDef)
+        immediate_class = scope if isinstance(scope, ast.ClassDef) else None
         inaccessible_binding = False
         while True:
-            if isinstance(scope, ast.ClassDef) and skip_class_namespace:
+            if isinstance(scope, ast.ClassDef) and scope is not immediate_class:
                 inaccessible_binding |= name in tables.get(scope, {})
                 scope = scope_of(scope)
                 continue
@@ -210,14 +238,23 @@ def python_events(content, rules):
             return '.'.join(parts[-2:]) if parts[-1] == 'generate' else parts[-1]
         return full
 
-    def literal_bindings(context):
-        names = {name for table in tables.values() for name in table}
-        resolved = {}
-        for name in names:
-            value, state = lookup(name, context)
-            if state == 'bound' and value[1] == 'value':
-                resolved[name] = value[0]
-        return resolved
+    def resolve_literal(reference, depth, expected):
+        binding, state = lookup(reference.id, reference)
+        if state != 'bound' or binding[1] != 'value':
+            return None
+        # The value AST remains attached to the original binding's lexical
+        # scope. Recursive names are looked up there, never in the consumer.
+        return _literal(binding[0], resolve_literal, depth, expected)
+
+    def bound_expression(node, depth=0):
+        if depth > 8:
+            return None
+        if not isinstance(node, ast.Name):
+            return node
+        binding, state = lookup(node.id, node)
+        if state != 'bound' or binding[1] != 'value':
+            return None
+        return bound_expression(binding[0], depth+1)
 
     def scope_name(node):
         names, scope = [], scope_of(node)
@@ -259,14 +296,13 @@ def python_events(content, rules):
                 if not known_inner and any(isinstance(n, ast.Name) and n.id in crypto_aliases for n in ast.walk(node.func)):
                     diagnostics.append(f'Unresolved or reassigned call target at line {node.lineno}; no confident crypto identity inferred.')
                 continue
-            bindings = literal_bindings(node)
             if name == 'getattr' and node.args and (canonical(node.args[0]) or '').split('.')[0] in crypto_roots:
                 diagnostics.append(f'Dynamic crypto attribute lookup at line {node.lineno}; target is unresolved.')
             text = name + '(' + ', '.join([ast.unparse(a) for a in node.args] + [f'{k.arg}={ast.unparse(k.value)}' for k in node.keywords]) + ')'
             original = ast.get_source_segment(content, node) or text
             key = None
             if name in ('AESGCM', 'algorithms.AES', 'AES.new', 'ChaCha20Poly1305') and node.args:
-                key = _literal(node.args[0], bindings)
+                key = _literal(node.args[0], resolve_literal)
             params = {'key_bits': len(key)*8} if isinstance(key, bytes) else {}
             for child in ast.walk(node):
                 if isinstance(child, ast.Call):
@@ -276,13 +312,13 @@ def python_events(content, rules):
                 elif isinstance(child, ast.Attribute) and child.attr in ('MODE_ECB','MODE_CBC','MODE_GCM','MODE_CTR'):
                     params['mode'] = child.attr[5:]
             if name.endswith('RSA.generate') and node.args:
-                bits = _literal(node.args[0], bindings)
+                bits = _literal(node.args[0], resolve_literal, expected=int)
                 if type(bits) is int:
                     params['key_bits'] = bits
             # Keyword values may refer to bounded literals too.
             for kw in node.keywords:
                 if kw.arg == 'key_size':
-                    bits = _literal(kw.value, bindings)
+                    bits = _literal(kw.value, resolve_literal, expected=int)
                     if type(bits) is int:
                         params['key_bits'] = bits
             # Extract only named cost/digest settings; passwords and salts never enter evidence.
@@ -291,10 +327,10 @@ def python_events(content, rules):
                             node.args[index] if len(node.args) > index else None)
 
             if name == 'hashlib.pbkdf2_hmac':
-                digest = _literal(argument(0, 'hash_name'), bindings)
+                digest = _literal(argument(0, 'hash_name'), resolve_literal, expected=str)
                 if isinstance(digest, str) and digest.lower().replace('-', '') in ('sha1','sha256','sha512'):
                     params['digest'] = digest.lower().replace('-', '')
-                count = _literal(argument(3, 'iterations'), bindings)
+                count = _literal(argument(3, 'iterations'), resolve_literal, expected=int)
                 if type(count) is int:
                     params['iterations'] = count
             elif name.endswith('PBKDF2HMAC'):
@@ -302,12 +338,12 @@ def python_events(content, rules):
                 digest_name = canonical(digest.func) if isinstance(digest, ast.Call) else ''
                 if digest_name and digest_name.split('.')[-1].lower() in ('sha1','sha256','sha512'):
                     params['digest'] = digest_name.split('.')[-1].lower()
-                count = _literal(argument(3, 'iterations'), bindings)
+                count = _literal(argument(3, 'iterations'), resolve_literal, expected=int)
                 if type(count) is int:
                     params['iterations'] = count
             elif name.startswith('argon2.'):
                 for index, keyword in enumerate(('time_cost', 'memory_cost', 'parallelism')):
-                    value = _literal(argument(index, keyword), bindings) if name.endswith('PasswordHasher') else None
+                    value = _literal(argument(index, keyword), resolve_literal, expected=int) if name.endswith('PasswordHasher') else None
                     if type(value) is int:
                         params[keyword] = value
                 variant = argument(6, 'type') if name.endswith('PasswordHasher') else None
@@ -317,13 +353,11 @@ def python_events(content, rules):
             elif name in ('bcrypt.gensalt', 'bcrypt.hashpw'):
                 salt_call = node
                 if name == 'bcrypt.hashpw':
-                    salt_call = argument(1, 'salt')
-                    if isinstance(salt_call, ast.Name):
-                        salt_call = bindings.get(salt_call.id)
+                    salt_call = bound_expression(argument(1, 'salt'))
                 if isinstance(salt_call, ast.Call) and canonical(salt_call.func) == 'bcrypt.gensalt':
                     rounds_node = next((k.value for k in salt_call.keywords if k.arg == 'rounds'),
                                        salt_call.args[0] if salt_call.args else None)
-                    rounds = _literal(rounds_node, bindings)
+                    rounds = _literal(rounds_node, resolve_literal, expected=int)
                     if type(rounds) is int:
                         params['rounds'] = rounds
             emitted = _emit_call(name, text, node.lineno, node.col_offset+1,
@@ -375,6 +409,21 @@ def javascript_events(content, rules):
         if t.lastgroup == 'string' and t.group().startswith('`') and '${' in t.group():
             diagnostics.append('Template interpolation is not analyzed; review embedded expressions.')
     active = [t for t in tokens if t.lastgroup != 'comment']
+    block_depth, depth_at = 0, {}
+    for index, token in enumerate(active):
+        depth_at[index] = block_depth
+        if token.group() == '{': block_depth += 1
+        elif token.group() == '}': block_depth = max(0, block_depth-1)
+    # A bare require call is the only accepted use of the CommonJS binding.
+    # Any declaration, parameter, destructuring or assignment of that name
+    # invalidates require provenance throughout this lexical analysis.
+    require_shadowed = any(
+        token.lastgroup == 'id' and token.group() == 'require'
+        and not (index and active[index-1].group() == '.')
+        and (index+1 >= len(active) or active[index+1].group() != '('
+             or (index and active[index-1].group() in ('function', 'class')))
+        for index, token in enumerate(active))
+    invalid_bindings, declaration_tokens = set(), set()
     # Only genuine import declarations and require calls are considered bindings.
     for i,t in enumerate(active):
         if t.group() not in ('import','require') or t.lastgroup != 'id':
@@ -408,24 +457,34 @@ def javascript_events(content, rules):
             if m:
                 for item in m.group(1).split(','):
                     pair = re.split(r'\s+as\s+|\s*:\s*',item.strip())
-                    if pair and re.fullmatch(r'\w+',pair[0]):
-                        aliases[pair[-1]]='crypto.'+pair[0]
+                    if pair and all(re.fullmatch(r'\w+', value) for value in pair):
+                        alias = pair[-1]
+                        if alias in aliases:
+                            invalid_bindings.add(alias)
+                        aliases[alias]='crypto.'+pair[0]
+                        offset = max(0, t.start()-250) if t.group() == 'require' else t.start()
+                        declaration_tokens.update(index for index, token in enumerate(active)
+                            if token.group() == alias and offset+m.start() <= token.start() < offset+m.end())
+                        if depth_at[i] > 0 or (t.group() == 'require' and require_shadowed):
+                            invalid_bindings.add(alias)
             else:
                 m = (re.search(r'(\w+)\s*=\s*$',before) if t.group()=='require'
                      else re.search(r'import\s+(?:\*\s+as\s+)?(\w+)\s+from',span))
                 if m:
-                    aliases[m.group(1)]='crypto'
+                    alias = m.group(1)
+                    if alias in aliases:
+                        invalid_bindings.add(alias)
+                    aliases[alias]='crypto'
+                    if depth_at[i] > 0 or (t.group() == 'require' and require_shadowed):
+                        invalid_bindings.add(alias)
                     if t.group() == 'require' and i >= 2 and active[i-1].group() == '=' and active[i-2].group() == m.group(1):
                         initializations.add(i-2)
 
     # Multiple writes, argument bindings and block-local import bindings cannot
     # establish a single namespace. Invalidate the entire file conservatively.
-    invalid = set()
-    block_depth, depth_at = 0, {}
-    for index, token in enumerate(active):
-        depth_at[index] = block_depth
-        if token.group() == '{': block_depth += 1
-        elif token.group() == '}': block_depth = max(0, block_depth-1)
+    invalid = set(invalid_bindings)
+    if invalid_bindings:
+        diagnostics.append('Conditional, repeated or shadowed crypto import binding is unresolved.')
     for root in set(aliases) | {'crypto', 'bcrypt', 'bcryptjs', 'argon2'}:
         writes = 0
         for index, token in enumerate(active):
@@ -433,7 +492,11 @@ def javascript_events(content, rules):
                 continue
             previous = active[index-1].group() if index else ''
             after = ''.join(t.group() for t in active[index+1:index+4])
+            if index not in declaration_tokens and previous in ('{', '[', ',', ':') and index+1 < len(active) and active[index+1].group() in ('}', ']', ',', ':', '='):
+                invalid.add(root)
             if previous == '.':
+                if index >= 3 and all(active[n].group() == '.' for n in range(index-3, index)):
+                    invalid.add(root)
                 continue
             if after.startswith('=>'):
                 invalid.add(root)

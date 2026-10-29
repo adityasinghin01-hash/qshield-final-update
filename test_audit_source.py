@@ -1,5 +1,6 @@
 """Pipeline regressions for evidence boundaries, source identity and KDF policy."""
 import json
+import ast
 import os
 from pathlib import Path
 import tempfile
@@ -7,6 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from main import run_pipeline
+from adapters import convert_code_results_to_findings
+from crypto_source import _literal
 
 
 class AuditSource(unittest.TestCase):
@@ -271,6 +274,83 @@ class AuditSource(unittest.TestCase):
         with patch('main.scan_tls', return_value=tls):
             report = run_pipeline(host='audit.test')
         self.assertIsNone(report['inventory']['findings'][0]['attributes']['fingerprint_sha256'])
+
+    def test_literal_alias_chains_keep_the_scope_of_each_binding(self):
+        source = ('import hashlib\ncost_base=1\ncost=cost_base\n'
+                  'def derive():\n    cost_base=600000\n'
+                  '    return hashlib.pbkdf2_hmac("sha256", password, salt, cost)')
+        report = self.scan(source)
+        self.assertEqual(self.active(report)[0]['attributes']['parameters']['iterations'], 1)
+        self.assertIn('WEAK_KDF_PARAMETERS', [a['rule_id'] for a in report['risk_assessment']['assessments']])
+        # The inverse must not invent weakness from a same-named local either.
+        report = self.scan(source.replace('cost_base=1', 'cost_base=600000', 1).replace('    cost_base=600000', '    cost_base=1'))
+        self.assertEqual(self.active(report)[0]['attributes']['parameters']['iterations'], 600000)
+
+    def test_literal_expansion_stops_before_exceeding_the_total_budget(self):
+        # This first expression is safe to evaluate on the old implementation:
+        # its 16 MiB result demonstrates the missing cumulative bound. The
+        # 64 GiB expression is exercised only after the first assertion passes.
+        self.assertIsNone(_literal(ast.parse("b'x' * 4096 * 4096", mode='eval').body, {}))
+        report = self.scan("hashlib.pbkdf2_hmac('sha256', p, s, b'x' * 4096 * 4096 * 4096)")
+        self.assertNotIn('iterations', self.active(report)[0]['attributes']['parameters'])
+        self.assertEqual(_literal(ast.parse("b'x' * 32", mode='eval').body, {}), b'x' * 32)
+
+    def test_js_destructuring_and_shadowed_require_are_unresolved(self):
+        cases = [
+            "if(flag) { const {createHash: hash}=require('crypto'); } hash('md5');",
+            "const {createHash: hash}=require('crypto'); function f({hash}) { hash('md5'); }",
+            "const {createHash: hash}=require('crypto'); ({hash}=fake); hash('md5');",
+            "function require(x) { return fake; } const {createHash: hash}=require('crypto'); hash('md5');",
+            "function f(require) { const {createHash: hash}=require('crypto'); hash('md5'); }",
+            "const require = fake; const c=require('crypto'); c.createHash('md5');",
+            "const {createHash: hash}=require('crypto'); function f([hash]) { hash('md5'); }",
+            "const {createHash: hash}=require('crypto'); function f(...hash) { hash('md5'); }",
+            "const {createHash: hash}=require('crypto'); ([hash]=fake); hash('md5');",
+        ]
+        for source in cases:
+            with self.subTest(source=source):
+                report = self.scan(source, '.js')
+                self.assertFalse(self.active(report))
+                self.assertTrue(report['modules']['code_scanner']['coverage']['unresolved'])
+
+    def test_pattern_captures_cannot_reuse_imported_aliases(self):
+        cases = [
+            "match user:\n    case {'h': h}:\n        h.md5(b'x')",
+            "match user:\n    case [*h]:\n        h.md5(b'x')",
+            "match user:\n    case {'x': x, **h}:\n        h.md5(b'x')",
+        ]
+        for source in cases:
+            with self.subTest(source=source):
+                report = self.scan('import hashlib as h\n' + source)
+                self.assertFalse(self.active(report))
+                self.assertTrue(report['modules']['code_scanner']['coverage']['unresolved'])
+
+    def test_nested_classes_skip_enclosing_class_namespaces(self):
+        report = self.scan("class Outer:\n    import hashlib as h\n    class Inner:\n        h.md5(b'x')")
+        self.assertFalse(self.active(report))
+        self.assertTrue(report['modules']['code_scanner']['coverage']['unresolved'])
+        report = self.scan("def outer():\n    import hashlib as h\n    class Outer:\n        class Inner:\n            h.md5(b'x')")
+        self.assertTrue(any(f['algorithm'] == 'MD5' for f in self.active(report)))
+
+    def test_adapter_parameter_schema_rejects_arbitrary_strings(self):
+        raw = {'findings': [{'detected_algorithm': 'PBKDF2-HMAC', 'likely_purpose': 'Password-Based Key Derivation',
+            'file_path': 'example.py', 'line_number': 1, 'match_type': 'CONFIRMED_CALL',
+            'parameters': {'digest': 'SALT_MARKER', 'iterations': 'PASSWORD_MARKER', 'rounds': 'PASSWORD_MARKER',
+                'curve': 'CURVE_SECRET', 'mode': 'MODE_SECRET', 'variant': 'VARIANT_SECRET',
+                'key_bits': True, 'memory_cost': 1.5}}]}
+        findings = convert_code_results_to_findings(raw)
+        self.assertNotIn('MARKER', json.dumps(findings[0].attributes))
+        self.assertNotIn('_SECRET', json.dumps(findings[0].attributes))
+        self.assertEqual(findings[0].attributes['parameters']['kdf_assessment']['status'], 'unknown')
+        raw['findings'][0]['parameters'] = {'digest': 'sha512', 'iterations': 220000, 'mode': 'GCM', 'curve': 'P-384', 'variant': 'argon2id'}
+        parameters = convert_code_results_to_findings(raw)[0].attributes['parameters']
+        self.assertEqual(parameters['iterations'], 220000)
+        self.assertEqual(parameters['mode'], 'GCM')
+        raw['findings'][0]['detected_algorithm'] = 'AES'
+        raw['findings'][0]['likely_purpose'] = 'Symmetric Encryption'
+        raw['findings'][0]['parameters'] = {'key_bits': 256, 'mode': 'MODE_SECRET', 'curve': 'CURVE_SECRET'}
+        finding = convert_code_results_to_findings(raw)[0]
+        self.assertNotIn('_SECRET', json.dumps({'algorithm': finding.algorithm, 'attributes': finding.attributes}))
 
 
 if __name__ == '__main__':

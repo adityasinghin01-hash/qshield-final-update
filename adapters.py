@@ -372,9 +372,10 @@ def _normalize_tls_cipher_algo(cipher_name: str, enc: str, bits: Optional[int]) 
 
 def _normalize_code_finding_algo(raw_algo: str, purpose: str, snippet: str = "", parameters=None) -> Tuple[str, str, Optional[int]]:
     from crypto_source import _parameters
+    from kdf_policy import safe_parameters
     algo = raw_algo.strip()
     low, context = algo.lower(), purpose.lower()
-    params = dict(parameters) if parameters is not None else _parameters(snippet)
+    params = safe_parameters(parameters) if parameters is not None else _parameters(snippet)
     bits = params.get('key_bits')
     if type(bits) is not int or bits <= 0:
         bits = None
