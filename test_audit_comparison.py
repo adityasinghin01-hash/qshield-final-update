@@ -193,6 +193,26 @@ class EvidenceComparisonTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 compare_scans(report, after)
 
+    def test_missing_trust_result_never_means_trusted(self):
+        telemetry = {'scan_status': 'ok', 'target': {'host': 'fixture.example', 'port': 443},
+                     'certificate_validation': {'trusted': False, 'error': 'untrusted'}}
+        with patch('main.scan_tls', return_value=telemetry):
+            before = run_pipeline(host='fixture.example')
+        for result in ({'error': None}, {'trusted': None, 'error': None}):
+            after_data = {**telemetry, 'certificate_validation': result}
+            with patch('main.scan_tls', return_value=after_data):
+                after = run_pipeline(host='fixture.example')
+            self.assertEqual(compare_scans(before, after)['status'], 'inconclusive')
+
+    def test_malformed_scan_options_are_a_client_error(self):
+        with patch('main.scan_tls', return_value={'scan_status': 'ok'}):
+            report = run_pipeline(host='fixture.example')
+        for bad in (None, [], 1):
+            after = copy.deepcopy(report)
+            after['metadata']['scan_options'] = bad
+            with self.subTest(value=bad), self.assertRaises(ValueError):
+                compare_scans(after, after)
+
 
 if __name__ == '__main__':
     unittest.main()

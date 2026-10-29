@@ -13,6 +13,8 @@ def _validate_report(report):
     meta = report.get('metadata', {})
     if not isinstance(meta.get('targets', {}), dict) or not isinstance(meta.get('errors', []), list):
         raise ValueError('Invalid metadata targets or diagnostics.')
+    if not isinstance(meta.get('scan_options', {}), dict):
+        raise ValueError('Scan options must be an object.')
     risk = report.get('risk_assessment', {})
     summary = risk.get('summary', {})
     if not isinstance(summary, dict):
@@ -146,11 +148,15 @@ def _compatibility_warnings(before, after):
                           'key_exchange', 'supported_protocols', 'supported_tls12_ciphers'):
                 if bool(left.get(field)) != bool(right.get(field)):
                     warnings.append('TLS ' + field.replace('_', ' ') + ' evidence is missing from one scan.')
-            for field in ('connection', 'certificate', 'key_exchange'):
+            for field in ('connection', 'certificate', 'certificate_validation', 'key_exchange'):
                 a_fields = set(left.get(field) or {})
                 b_fields = set(right.get(field) or {})
                 if a_fields != b_fields:
                     warnings.append('TLS ' + field.replace('_', ' ') + ' evidence fields differ.')
+            for scan in (left, right):
+                validation = scan.get('certificate_validation')
+                if validation is not None and type(validation.get('trusted')) is not bool:
+                    warnings.append('TLS certificate trust outcome is unresolved.')
             protocols_a, protocols_b = left.get('supported_protocols', {}), right.get('supported_protocols', {})
             if set(protocols_a or {}) != set(protocols_b or {}):
                 warnings.append('TLS protocol probe coverage differs; an omitted probe is not a rejected protocol.')
