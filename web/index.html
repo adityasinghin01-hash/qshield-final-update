@@ -181,6 +181,24 @@ function CyberExploration({data,onInspect}){
  </>;
 }
 
+function EvidenceCoverage({data}) {
+ const summary=data?.risk_assessment?.summary||{}, coverage=summary.coverage?.source;
+ const assets=summary.affected_asset_counts||{};
+ return <section className="release-panel" aria-label="Assessment evidence and coverage">
+  <div className="intel-panel-head"><h3>Evidence behind this assessment</h3><span>{summary.coverage?.status||'UNAVAILABLE'} / OBSERVED SCOPE</span></div>
+  <div className="release-deltas">
+   <div><span>Known critical findings</span><strong>{summary.severity?.critical??'—'}</strong></div>
+   <div><span>Affected assets</span><strong>{assets.total??'—'}</strong><small>Distinct files or endpoints with assessed risks</small></div>
+   <div><span>Unknown findings</span><strong>{summary.unknown_finding_count??'—'}</strong><small>{summary.unknown_count??'—'} unknown evidence entries</small></div>
+   <div><span>Critical findings with unknown evidence</span><strong>{summary.unresolved_critical_count??'—'}</strong><small>Excluded or uninspected files have unassessed severity</small></div>
+  </div>
+  {coverage&&<p className="intel-description">Source files: {coverage.scanned_files??0} analyzed / {coverage.attempted_files??0} attempted · {coverage.supported_files??0} supported · {coverage.unsupported_files??0} unsupported · {coverage.excluded_files??0} excluded entries.</p>}
+  <p className="intel-caption">The posture score is a heuristic over observed categories. Static observations do not verify runtime behavior, complete coverage or compliance.</p>
+  {!!summary.unknown_reasons?.length&&<details><summary>Review unknown evidence ({summary.unknown_reasons.length})</summary>{summary.unknown_reasons.map((entry,i)=><p className="intel-caption" key={i}><code>{entry.finding_id||entry.path||entry.module||'Evidence'}</code>: {(entry.reasons||[]).join('; ')}</p>)}</details>}
+  {coverage&&<details><summary>Source analysis boundaries and exclusions</summary><p className="intel-caption">{Object.entries(coverage.capabilities||{}).map(([k,v])=>k+': '+String(v)).join(' · ')}</p>{coverage.exclusions?.map((entry,i)=><p className="intel-caption" key={i}><code>{entry.path}</code>: {entry.reason}</p>)}{!coverage.exclusions?.length&&<p className="intel-caption">No source entries were excluded from the requested static scan.</p>}</details>}
+ </section>;
+}
+
 function EvidenceTools({view,data,onInspect,onLoad}) {
  const [history,setHistory]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[baseline,setBaseline]=useState(''),[target,setTarget]=useState(''),[comparison,setComparison]=useState(null);
  const inventory=data?.inventory?.findings||[],assessments=data?.risk_assessment?.assessments||[];
@@ -612,6 +630,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
             )}
 
             {scanData && <div className="release-report-strip" aria-live="polite"><div><span className="release-badge">{scanData.metadata?.is_demo?'DEMO / ILLUSTRATIVE':scanData.metadata?.flow_type?.toUpperCase()||'SCAN REPORT'}</span><span>{scanData.metadata?.scan_finished_at ? new Date(scanData.metadata.scan_finished_at).toLocaleString() : ''}</span><span>{scanData.metadata?.errors?.length?'Partial or failed stages — review diagnostics':'Scan snapshot loaded'}</span></div><div><strong>{readinessScore==null?'N/A':readinessScore+'/100'}</strong><span>{summary.readiness_label || "Readiness undetermined"}<small className="block">Observed scope / not compliance</small></span><button onClick={handleExportMarkdown}>Export Markdown ↓</button></div></div>}
+            {scanData && <EvidenceCoverage data={scanData}/>}
             <VisualIntelligence data={scanData} sevFilter={sevFilter} activeTab={activeTab} searchQuery={searchQuery}
               onSeverity={s=>{setConfFilter('all');setSevFilter(s);setActiveTab('all');setSearchQuery('');}}
               onAlgorithm={a=>{setConfFilter('all');setSearchQuery(searchQuery===a?'':a);setActiveTab('all');setSevFilter('all');}}

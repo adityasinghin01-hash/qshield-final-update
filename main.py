@@ -20,6 +20,8 @@ Provides:
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
+import hashlib
 import json
 import io
 import math
@@ -201,6 +203,9 @@ def run_pipeline(
             "targets": target_summary,
             "scenario": scenario,
             "crqc_horizon_years": engine.planning.crqc_years,
+            "ruleset_fingerprint": hashlib.sha256(json.dumps(asdict(ruleset), sort_keys=True, default=str).encode()).hexdigest(),
+            "scan_options": {"deep_tls": deep_tls, "ignore_comments": ignore_comments,
+                             "quantum_only": quantum_only, "iac": iac},
             "errors": errors,
         },
         "modules": {

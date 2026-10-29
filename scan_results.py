@@ -197,8 +197,11 @@ def render_markdown(
                   'Bounded static observations do not establish runtime execution, defaults or complete repository safety.', '']
         for entry in coverage.get('exclusions', []):
             lines.append('- Excluded ' + inline(entry.get('path')) + ': ' + inline(entry.get('reason')))
-        for unknown in summary.get('unknown_reasons', []):
-            lines.append('- Unknown ' + inline(unknown.get('finding_id') or unknown.get('path')) + ': ' + inline('; '.join(unknown.get('reasons', []))))
+        lines.append('')
+    if summary.get('unknown_reasons'):
+        lines += ['## Unknown evidence', '']
+        for unknown in summary['unknown_reasons']:
+            lines.append('- Unknown ' + inline(unknown.get('finding_id') or unknown.get('path') or unknown.get('module')) + ': ' + inline('; '.join(unknown.get('reasons', []))))
         lines.append('')
     errors = meta.get('errors', [])
     if errors:

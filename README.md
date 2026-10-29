@@ -1,5 +1,25 @@
 # 🛡️ Q-SHIELD: Integrated Cryptographic Post-Quantum Migration & Risk Suite
 
+### Audit fixes: evidence, exports and comparison
+
+Source scans report supported, excluded and unresolved evidence explicitly;
+symlinked source entries are excluded. Password KDF cost observations retain
+their parameters and uncertainty: an adequate explicit cost does not establish
+salt security or runtime correctness. See [source evidence boundaries](docs/SOURCE_EVIDENCE.md).
+
+CBOM and Markdown buttons export the exact displayed scan. Every demo receives
+an exportable session identity; expired history entries produce an error without
+switching to the latest result. Formal CBOM validation requires
+`pip install -r requirements-dev.txt`; run `python tools/validate_cbom_exports.py`
+for the offline source/TLS/IaC validation gate. Validator results distinguish
+valid, invalid and not formally validated.
+
+Comparison pairs source observations by relative file, function/scope and
+canonical call while preserving duplicate counts. Missing files, exclusions,
+unknown evidence, changed settings/rules/targets and demo inputs make the result
+inconclusive. A finding absent from a comparable static rescan is an observed
+change, not proof of remediation or runtime behavior.
+
 Focused static Dockerfile, ingress-nginx Ingress and Terraform TLS checks are available with `python main.py --repo <path> --iac`. See [supported IaC rules, policy catalog and limitations](docs/IAC_SCANNER.md). This pass is opt-in and does not establish runtime TLS or PQC support.
 
 **Q-SHIELD** is an enterprise-grade cryptographic discovery, risk quantification, and post-quantum migration orchestrator. It inspects both network TLS/X.509 postures and source code ASTs, synthesizes multi-modal findings into defensible risk assessments, mathematically models quantum threats (Mosca's Theorem, Shor's and Grover's algorithms, Harvest-Now-Decrypt-Later), and provides standardized migration roadmaps (NIST FIPS 203 ML-KEM, FIPS 204 ML-DSA, FIPS 205 SLH-DSA).
