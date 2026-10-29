@@ -1,6 +1,10 @@
 """Regression checks for merging the fixed backend with the visual dashboard."""
 import copy
 import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -11,6 +15,9 @@ from unittest.mock import patch
 
 import dashboard
 from adapters import convert_tls_results_to_findings
+from cbom import validate_cbom_schema
+
+ROOT = Path(__file__).resolve().parent
 
 
 class TestMergedDashboard(unittest.TestCase):
@@ -91,14 +98,55 @@ class TestMergedDashboard(unittest.TestCase):
     def test_visual_assets_and_section_targets(self):
         status, page, _ = self.request('/')
         self.assertEqual(status, 200)
-        for text in (b'function QuantumScene', b'function VisualIntelligence', b'function CyberExploration',
-                     b'function EvidenceTools', b'data-presets="qshield-react"'):
-            self.assertIn(text, page)
+        self.assertIn(b'/assets/app.js', page)
+        status, script, headers = self.request('/assets/app.js')
+        self.assertEqual(status, 200)
+        self.assertIn('javascript', headers['Content-Type'])
+        self.assertGreater(len(script), 1000)
         status, css, headers = self.request('/command.css')
         self.assertEqual(status, 200)
         self.assertIn('text/css', headers['Content-Type'])
         self.assertIn(b'prefers-reduced-motion', css)
         self.assertEqual(headers['X-Content-Type-Options'], 'nosniff')
+
+    def test_health_scan_and_cbom_export_report_same_release(self):
+        status, body, _ = self.request('/api/health')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['version'], '1.4.1')
+        status, body, _ = self.request('/api/scan', {
+            'scan_type': 'code', 'repo': str(ROOT/'sample_vulnerable_app')})
+        self.assertEqual(status, 200)
+        scan = json.loads(body)
+        self.assertEqual(scan['metadata']['version'], '1.4.1')
+        status, body, _ = self.request('/api/export?format=cbom&id='+scan['metadata']['scan_id'])
+        self.assertEqual(status, 200)
+        document = json.loads(body)
+        self.assertEqual(document['metadata']['tools']['components'][0]['version'], '1.4.1')
+        self.assertIn({'name': 'qshield:version', 'value': '1.4.1'}, document['metadata']['properties'])
+        valid, error = validate_cbom_schema(document, ROOT/'docs/bom-1.6.schema.json')
+        self.assertTrue(valid, error)
+
+    def test_cli_json_and_cbom_release_parity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            json_path, cbom_path = Path(temporary)/'scan.json', Path(temporary)/'cbom.json'
+            result = subprocess.run([sys.executable, str(ROOT/'main.py'), '--repo',
+                str(ROOT/'sample_vulnerable_app'), '--json', str(json_path), '--cbom', str(cbom_path)],
+                cwd=ROOT, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(json_path.read_text())['metadata']['version'], '1.4.1')
+            document = json.loads(cbom_path.read_text())
+            self.assertEqual(document['metadata']['tools']['components'][0]['version'], '1.4.1')
+            valid, error = validate_cbom_schema(document, ROOT/'docs/bom-1.6.schema.json')
+            self.assertTrue(valid, error)
+
+    def test_bundled_fonts_are_served_with_font_mime_and_exact_bytes(self):
+        for suffix, mime in (('woff2', 'font/woff2'), ('woff', 'font/woff')):
+            font = next((ROOT/'web/assets/fonts').glob('*.'+suffix))
+            status, body, headers = self.request('/'+font.relative_to(ROOT/'web').as_posix())
+            self.assertEqual(status, 200)
+            self.assertEqual(headers['Content-Type'], mime)
+            self.assertEqual(headers['X-Content-Type-Options'], 'nosniff')
+            self.assertEqual(body, font.read_bytes())
 
     def test_exports_do_not_fall_back_from_missing_id(self):
         self.request('/api/demo')

@@ -33,7 +33,7 @@ except ImportError:
 
 CYCLONEDX_VERSION = "1.6"
 QSHIELD_TOOL_NAME = "Q-SHIELD"
-QSHIELD_TOOL_VERSION = "2.0.0"
+from qshield_version import VERSION as QSHIELD_TOOL_VERSION
 
 # Schema-valid enum constants
 VALID_PRIMITIVES: Set[str] = {

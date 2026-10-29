@@ -8,6 +8,7 @@ __pycache__/
 .venv
 env/
 venv/
+node_modules/
 
 # Scan output dumps (temporary)
 combined_test.json

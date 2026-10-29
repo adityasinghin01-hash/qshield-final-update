@@ -62,3 +62,15 @@ jobs:
 
       - name: Formally validate representative CBOM exports offline
         run: python tools/validate_cbom_exports.py
+
+  dashboard-assets:
+    name: Verify committed dashboard build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: node tools/build-web.mjs --check

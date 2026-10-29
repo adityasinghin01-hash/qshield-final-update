@@ -2,6 +2,8 @@
 
 This document provides the official Project Lead release checklist, end-to-end architecture explanation, and technical defense guide for hackathon judges and security auditors.
 
+For the 1.4.1 audit repair release, use `qshield_version.py` as the application version authority. Run `python -m unittest discover -s . -p "test_*.py"`, `python tools/validate_cbom_exports.py` and `node tools/build-web.mjs --check` after installing the development dependencies. Python serves the committed React 18 assets without Node or CDN requests; Node 22 is needed only to rebuild them with `npm ci` and `npm run build:web`. See [asset build and attribution](FRONTEND_BUILD.md) and [current evidence boundaries](../README.md#audit-repair-scope). Remote CI and branch protection need separate evidence.
+
 ---
 
 ## 📋 Release Readiness Checklist

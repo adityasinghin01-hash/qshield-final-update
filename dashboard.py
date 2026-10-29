@@ -54,11 +54,13 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 try:
-    from main import run_pipeline, VERSION
+    from main import run_pipeline
+    from qshield_version import VERSION
     from risk_engine import Report, RuleSet, DEFAULT_RULES_JSON
     from cbom import export_cbom
 except ImportError:
-    from .main import run_pipeline, VERSION
+    from .main import run_pipeline
+    from .qshield_version import VERSION
     from .risk_engine import Report, RuleSet, DEFAULT_RULES_JSON
     from .cbom import export_cbom
 
@@ -570,6 +572,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     mime = "image/png"
                 elif path.endswith(".ico"):
                     mime = "image/x-icon"
+                elif path.endswith(".woff2"):
+                    mime = "font/woff2"
+                elif path.endswith(".woff"):
+                    mime = "font/woff"
 
                 content = static_file.read_bytes()
                 self.send_response(200)

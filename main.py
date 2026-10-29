@@ -58,7 +58,7 @@ except ImportError:
 
 from scan_results import post_process_scan_result, render_markdown
 
-VERSION = "2.0.0"
+from qshield_version import VERSION
 
 
 # ============================================================================

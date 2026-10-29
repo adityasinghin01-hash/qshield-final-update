@@ -27,7 +27,7 @@ This document defines the official branch lifecycle, pull request flow, integrat
 
 ### 1. `main` Branch (Production / Judge Demo)
 - **Purpose**: Stable release branch presented to hackathon judges.
-- **Rule**: Contains **only** fully tested, production-ready code.
+- **Rule**: Contains reviewed release candidates. Test evidence, deployment constraints and remote protection settings must be verified for each release; branch naming alone does not establish production readiness.
 - **Access Control**: **STRICTLY PROTECTED**. Direct pushes and force pushes are blocked.
 - **Merge Source**: Only accepts Pull Requests from `integration` authored/approved by the Project Lead.
 - **Guarantees**: Running `python main.py --demo` or `python main.py --dashboard` on `main` must ALWAYS succeed without errors.

@@ -22,7 +22,7 @@ change, not proof of remediation or runtime behavior.
 
 Focused static Dockerfile, ingress-nginx Ingress and Terraform TLS checks are available with `python main.py --repo <path> --iac`. See [supported IaC rules, policy catalog and limitations](docs/IAC_SCANNER.md). This pass is opt-in and does not establish runtime TLS or PQC support.
 
-**Q-SHIELD** is an enterprise-grade cryptographic discovery, risk quantification, and post-quantum migration orchestrator. It inspects both network TLS/X.509 postures and source code ASTs, synthesizes multi-modal findings into defensible risk assessments, mathematically models quantum threats (Mosca's Theorem, Shor's and Grover's algorithms, Harvest-Now-Decrypt-Later), and provides standardized migration roadmaps (NIST FIPS 203 ML-KEM, FIPS 204 ML-DSA, FIPS 205 SLH-DSA).
+**Q-SHIELD 1.4.1** is a local cryptographic inventory and migration-planning prototype derived from `version-1.4`. It combines bounded TLS observations, Python AST analysis, a JavaScript/TypeScript token analyzer, and optional static IaC checks. Findings support investigation and conditional planning; they do not certify production security or compliance.
 
 ---
 
@@ -31,7 +31,7 @@ Focused static Dockerfile, ingress-nginx Ingress and Terraform TLS checks are av
 ```mermaid
 flowchart TD
     subgraph MultiModalScanners ["1. Multi-Modal Discovery Layer"]
-        A["TLS & Network Scanner\n(tls_scanner.py - Member 1)\n• TLS 1.0-1.3 Protocol Versions\n• X.509 Cert Chain & Signature\n• Ephemeral KX & PQC Hybrid Groups"]
+        A["TLS & Network Scanner\n(tls_scanner.py - Member 1)\n• TLS 1.0-1.3 Protocol Versions\n• X.509 Leaf & Separate Trust Probe\n• Independent Key-Exchange Group Probe"]
         B["Source Code AST Scanner\n(code_scanner.py - Member 2)\n• Python, JS/TS Cryptographic Calls\n• Asymmetric Keys & Signatures\n• Fast Password Hashes & Hardcoded Secrets"]
     end
 
@@ -91,7 +91,7 @@ The repository uses a disciplined three-tier branch hierarchy designed for safe 
                             └──────────────────────────────┘
 ```
 
-* **`main` (Protected Release Branch)**: Stable, production-ready branch demonstrated to hackathon judges. Direct commits and force-pushes are strictly forbidden. Only verified releases merged from `integration` by the Project Lead reach `main`.
+* **`main` (Protected Release Branch)**: Release branch under the team’s documented review policy. Remote protection settings and production readiness require separate verification. Direct commits and force-pushes are strictly forbidden. Only verified releases merged from `integration` by the Project Lead reach `main`.
 * **`integration` (Shared Staging Branch)**: All member branches open Pull Requests targeting `integration`. Features are integrated, cross-module compatibility is validated, and full regression tests run here first.
 * **`member/*` (Isolated Feature Branches)**:
   * `member/cli`: Assigned to Member 1 (CLI & Scanners)
@@ -164,7 +164,7 @@ python3 main.py --repo sample_vulnerable_app --scenario relaxed
 
 ## 📊 Lightweight React Dashboard
 
-Launch the interactive, browser-based dashboard with zero external npm/node requirements:
+Launch the dashboard using committed local browser assets. Node is only needed to rebuild them:
 
 ```bash
 python3 main.py --dashboard
@@ -174,7 +174,7 @@ python3 dashboard.py
 
 * **URL**: `http://localhost:8080`
 * **Features**:
-  * **Executive KPI Cards**: Real-time Post-Quantum Readiness Score meter, critical risk count, track counts.
+  * **Executive KPI Cards**: Heuristic posture score with unknown-coverage disclosure, critical risk count, track counts.
   * **Interactive Target Bar**: Test remote hosts (presets: `google.com`, `badssl.com`) or local repos with 1 click.
   * **Track Separation**: Distinct tabs for Track A (Quantum Shor/Grover) and Track B (Conventional Hygiene).
   * **Evidence & Migration Modal**: Click any finding to inspect AST line snippets, certificate details, threat models, and NIST-recommended algorithms (ML-KEM, ML-DSA).
@@ -185,7 +185,7 @@ python3 dashboard.py
 
 ## 🎬 Automated Demo Workflow
 
-A reliable, reproducible demonstration workflow is provided to validate all capabilities in seconds:
+The demonstration workflow exercises selected scanner and presentation paths:
 
 ```bash
 ./demo.sh
@@ -208,7 +208,7 @@ The demo script automatically executes:
 | Dimension | Track A: Post-Quantum Cryptography | Track B: Conventional Cryptographic Hygiene |
 | :--- | :--- | :--- |
 | **Governing Threat** | Shor's Algorithm, Grover's Algorithm, HNDL (Harvest-Now-Decrypt-Later) | Classical brute-force, collision attacks, pattern leakage |
-| **Target Algorithms** | RSA, ECDSA, ECDH, Ed25519, DH, AES-128 | MD5, SHA-1, 3DES, RC4, ECB Mode, Fast Unsalted Passwords |
+| **Target Algorithms** | RSA, ECDSA, ECDH, Ed25519, DH; symmetric quantum-margin planning | MD5, SHA-1, 3DES, RC4, ECB Mode, Fast Unsalted Passwords |
 | **Mathematical Basis** | Mosca's Theorem ($X + Y > Z$) against CRQC horizon | Computational complexity, Shannon diffusion, collision search |
 | **Remediation Standard** | NIST FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA) | Argon2id (RFC 9106), AES-256-GCM, SHA-256/384/512 |
 | **Defensibility Rule** | PQC **only** solves quantum vulnerabilities. | Classical flaws **cannot** be fixed by migrating to PQC. |
@@ -217,11 +217,12 @@ The demo script automatically executes:
 
 ## 🧪 Unit & Integration Test Suite
 
-Run the full automated test suite (30+ tests across risk engine, adapters, and pipeline):
+Install development dependencies and run all discovered regression tests and offline export checks. The test count changes as coverage grows; use the command output and release verification notes for the measured result.
 
 ```bash
-python3 -m unittest test_risk_engine.py
-python3 -m unittest test_integration.py
+python3 -m pip install -r requirements-dev.txt
+python3 -m unittest discover -s . -p "test_*.py" -v
+python3 tools/validate_cbom_exports.py
 ```
 
 
@@ -256,10 +257,7 @@ failed scans do not produce a successful posture score. Comparisons with failed
 stages are inconclusive, and comparisons with different targets, scenarios, or demo
 data show scope warnings.
 
-The dashboard uses CDN-hosted React, Babel, Tailwind, and fonts, so its browser UI
-requires internet access. Backend code scans and the generated demo do not require
-a live TLS target. No npm build is required. Keep both `web/index.html` and
-`web/command.css` in the repository.
+React, Tailwind utilities and fonts are bundled locally in `web/assets/`; the browser does not fetch runtime assets from a CDN. Python serves the committed build without Node. Rebuild after source changes with `npm ci && npm run build:web`, then verify `node tools/build-web.mjs --check`. See [build and license details](docs/FRONTEND_BUILD.md). Local source scans work offline; selected TLS scans need network access.
 
 Run the full regression suite before pushing:
 
@@ -294,3 +292,11 @@ Python call evidence uses the AST; JavaScript/TypeScript evidence uses a token-b
 The dashboard binds to loopback, validates the Host and browser Origin, and limits repository scans to this workspace (including resolved symlink paths). For another authorized repository, use `python main.py --repo <path>`. Do not expose the local dashboard through a public reverse proxy.
 
 The educational migration demo requires `cryptography>=50` with an ML-KEM-capable backend. It performs a real two-party X25519 + ML-KEM-768 round trip and detects ciphertext tampering through key confirmation. It does not implement an authenticated transport protocol. If ML-KEM is unavailable, it fails explicitly instead of simulating it.
+
+## Audit repair scope
+
+The repairs are delivered in reviewable chunks: CI/path portability and regression coverage (21–25); TLS provenance and explicit planning assumptions (15–20); release consistency, local assets and task-focused accessible UI (26–36). Earlier scanner, export and comparison fixes (1–14) remain in place. The local branch is `Aditya-Singh-AIML`. Configured CI is not evidence that remote GitHub Actions ran.
+
+Source and IaC safe traversal uses POSIX descriptor-relative no-follow opens. An explicitly selected root can be reached through a canonical parent alias, such as macOS temporary paths; symlink entries within the scanned tree remain excluded. Unsupported safe-open platforms report limited coverage rather than silently following links. See [source limits](docs/SOURCE_EVIDENCE.md) and [TLS provenance](docs/TLS_EVIDENCE.md).
+
+CRQC scenarios are assumptions, not predicted dates. The Mosca planning inequality depends on the chosen data/trust lifetime and migration duration. Grover’s idealized query reduction does not establish a practical AES-128 break; NIST currently permits AES-128, AES-192 and AES-256 in existing applications. See [NIST’s transition FAQ](https://csrc.nist.gov/projects/post-quantum-cryptography/faqs).

@@ -65,8 +65,11 @@ class TestIaCDashboard(unittest.TestCase):
     def test_web_controls_and_evidence_panel_are_served(self):
         status,body=self.request('/')
         self.assertEqual(status,200)
-        for label in (b'function IaCEvidence',b'Scan IaC & Docker',b'Try IaC example',b'IaC &amp; Docker Evidence',b'Unknown settings'):
-            self.assertIn(label,body)
+        self.assertIn(b'/assets/app.js',body)
+        status,script=self.request('/assets/app.js')
+        self.assertEqual(status,200)
+        self.assertIn(b'Try IaC example',script)
+
 
 
 if __name__=='__main__':
