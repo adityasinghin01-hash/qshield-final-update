@@ -31,6 +31,11 @@ def _validate_report(report):
             observations = scan.get('observations', [])
             if not isinstance(observations, list) or any(not isinstance(x, dict) for x in observations):
                 raise ValueError('Infrastructure observations must be objects.')
+        if module == 'tls_scanner':
+            for field in ('connection', 'cipher_suite', 'certificate', 'certificate_validation',
+                          'key_exchange', 'supported_protocols'):
+                if field in scan and scan[field] is not None and not isinstance(scan[field], dict):
+                    raise ValueError('TLS ' + field + ' must be an object or null.')
     for field in ('severity', 'track'):
         values = summary.get(field, {})
         if not isinstance(values, dict) or any(type(n) is not int or n < 0 for n in values.values()):
@@ -146,6 +151,14 @@ def _compatibility_warnings(before, after):
                 b_fields = set(right.get(field) or {})
                 if a_fields != b_fields:
                     warnings.append('TLS ' + field.replace('_', ' ') + ' evidence fields differ.')
+            protocols_a, protocols_b = left.get('supported_protocols', {}), right.get('supported_protocols', {})
+            if set(protocols_a or {}) != set(protocols_b or {}):
+                warnings.append('TLS protocol probe coverage differs; an omitted probe is not a rejected protocol.')
+            if any(type(value) is not bool for protocols in (protocols_a, protocols_b)
+                   for value in (protocols or {}).values()):
+                warnings.append('TLS protocol probe results include unresolved outcomes.')
+            if a.get('scan_options', {}).get('deep_tls') or b.get('scan_options', {}).get('deep_tls'):
+                warnings.append('Deep TLS cipher probing lacks complete per-probe outcome provenance.')
     return list(dict.fromkeys(warnings))
 
 

@@ -149,12 +149,48 @@ class EvidenceComparisonTests(unittest.TestCase):
         self.assertEqual(result['status'], 'inconclusive')
         self.assertTrue(any('TLS' in warning for warning in result['warnings']))
 
+    def test_missing_protocol_probe_is_not_a_negative_probe(self):
+        telemetry = {'scan_status': 'ok', 'target': {'host': 'fixture.example', 'port': 443},
+                     'connection': {'tls_version': 'TLSv1.3'},
+                     'supported_protocols': {'TLSv1.0': True, 'TLSv1.2': True, 'TLSv1.3': True}}
+        with patch('main.scan_tls', return_value=telemetry):
+            before = run_pipeline(host='fixture.example')
+        missing = copy.deepcopy(telemetry)
+        missing['supported_protocols'].pop('TLSv1.0')
+        with patch('main.scan_tls', return_value=missing):
+            after = run_pipeline(host='fixture.example')
+        self.assertEqual(compare_scans(before, after)['status'], 'inconclusive')
+        supported = copy.deepcopy(telemetry)
+        supported['supported_protocols']['TLSv1.0'] = False
+        with patch('main.scan_tls', return_value=supported):
+            after = run_pipeline(host='fixture.example')
+        self.assertEqual(compare_scans(before, after)['status'], 'improved')
+
+    def test_arrow_functions_have_distinct_comparison_identity(self):
+        self.file = self.root/'source.js'
+        before = self.scan("const a=()=>{crypto.createHash('md5');};")
+        after = self.scan("const b=()=>{crypto.createHash('md5');};")
+        result = compare_scans(before, after)
+        self.assertFalse(result['persistent_findings'])
+        self.assertEqual(len(result['new_findings']), 1)
+        self.assertEqual(len(result['resolved_findings']), 1)
+
     def test_malformed_nested_coverage_is_a_client_error(self):
         report = self.scan('hashlib.md5(data)')
         for bad in (None, [], 'bad'):
             after = copy.deepcopy(report)
             after['modules']['code_scanner']['coverage'] = bad
             with self.subTest(value=bad), self.assertRaises(ValueError):
+                compare_scans(report, after)
+
+    def test_malformed_nested_tls_is_a_client_error(self):
+        with patch('main.scan_tls', return_value={'scan_status': 'ok', 'connection': {'tls_version': 'TLSv1.3'}}):
+            report = run_pipeline(host='fixture.example')
+        for field in ('connection', 'cipher_suite', 'certificate', 'certificate_validation',
+                      'key_exchange', 'supported_protocols'):
+            after = copy.deepcopy(report)
+            after['modules']['tls_scanner'][field] = 1
+            with self.subTest(field=field), self.assertRaises(ValueError):
                 compare_scans(report, after)
 
 
