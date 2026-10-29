@@ -264,6 +264,45 @@ class AuditSource(unittest.TestCase):
         self.assertEqual(attrs['source_identity'], self.active(b)[0]['attributes']['source_identity'])
         self.assertEqual(a['modules']['code_scanner']['coverage']['settings'], {'ignore_comments': False, 'quantum_only': False})
 
+    def test_named_arrow_scope_changes_source_identity(self):
+        for body in ['() => { return crypto.createHash("md5"); }',
+                     'value => crypto.createHash("md5")',
+                     'async () => crypto.createHash("md5")']:
+            with self.subTest(body=body):
+                before = self.scan('const a = ' + body + ';', '.js')
+                after = self.scan('const b = ' + body + ';', '.js')
+                attrs = self.active(before)[0]['attributes']
+                self.assertEqual(attrs['source_scope'], 'a')
+                self.assertEqual(self.active(after)[0]['attributes']['source_scope'], 'b')
+                self.assertNotEqual(attrs['source_identity']['anchor'], self.active(after)[0]['attributes']['source_identity']['anchor'])
+                shifted = self.scan('\n\nconst a = ' + body + ';', '.js')
+                self.assertEqual(attrs['source_identity'], self.active(shifted)[0]['attributes']['source_identity'])
+
+    def test_nested_arrow_names_keep_ancestry_and_do_not_scope_neighbor_calls(self):
+        source = ('const left = () => { const same = () => crypto.createHash("md5"); };'
+                  'const right = () => { const same = () => { crypto.createHash("md5"); }; };'
+                  'crypto.createHash("md5");')
+        calls = self.active(self.scan(source, '.js'))
+        self.assertEqual([f['attributes']['source_scope'] for f in calls], ['left.same', 'right.same', '<module>'])
+        self.assertNotEqual(calls[0]['attributes']['source_identity']['anchor'], calls[1]['attributes']['source_identity']['anchor'])
+
+    def test_ambiguous_arrow_scopes_are_explicitly_unresolved(self):
+        for source in ['items.map(() => crypto.createHash("md5"));',
+                       'const same = () => crypto.createHash("md5"); const same = () => crypto.createHash("md5");']:
+            with self.subTest(source=source):
+                report = self.scan(source, '.js')
+                self.assertTrue(report['modules']['code_scanner']['coverage']['unresolved'])
+                self.assertTrue(all(f['attributes']['source_scope'] == '<unresolved>' for f in self.active(report)))
+
+    def test_semicolon_free_expression_arrow_boundary_is_conservative(self):
+        report = self.scan('const a = () => crypto.createHash("md5")\ncrypto.createHash("md5");', '.js')
+        self.assertTrue(report['modules']['code_scanner']['coverage']['unresolved'])
+        self.assertTrue(all(f['attributes']['source_scope'] == '<unresolved>' for f in self.active(report)))
+
+    def test_arrow_and_named_function_scopes_keep_nesting_order(self):
+        report = self.scan('const outer = () => { function inner() { crypto.createHash("md5"); } };', '.js')
+        self.assertEqual(self.active(report)[0]['attributes']['source_scope'], 'outer.inner')
+
     def test_tls_fingerprint_real_shape_and_missing(self):
         tls = {'scan_status': 'ok', 'target': {'host': 'audit.test'}, 'certificate': {
             'public_key': {'algorithm': 'RSA', 'key_size_bits': 2048}, 'fingerprint_sha256': 'ab' * 32}}

@@ -43,6 +43,13 @@ is not implemented and therefore remains unknown.
 
 `source_scope` is the Python class/function path, or a best-effort JS lexical
 function/class path; `source_call` is the canonical callee without arguments.
+Direct `const`/`let`/`var` arrow bindings also contribute their names to that
+path for block bodies and bounded expression bodies. Nested paths preserve the
+enclosing function/arrow order. Anonymous callbacks, duplicate same-parent arrow
+names and ambiguous expression boundaries have scope `<unresolved>` and an
+unresolved diagnostic; they do not establish a confident module scope for
+comparison. Unparenthesized expression-body newlines remain conservative because
+automatic semicolon insertion requires a complete JS parser.
 `source_identity` version 1 contains `relative_path`, `scope`, `call`,
 `match_type`, `occurrence`, and `anchor` (SHA-256 of the sorted-key JSON of the
 other fields, including version). Occurrence is one-based within each

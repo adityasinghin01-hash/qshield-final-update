@@ -529,19 +529,95 @@ def javascript_events(content, rules):
         if writes > initialization:
             invalid.add(root)
 
-    # Lexical function/class paths are best-effort; closures and dynamic scopes
-    # are never modeled as runtime facts.
-    scope_at, stack, pending = {}, [], None
+    # Scope regions, rather than a brace-only stack, also cover expression
+    # arrows. Only a direct const/let/var binding gives an arrow a stable name.
+    # Anonymous callbacks and repeated same-parent names remain unresolved.
+    pairs, delimiter_stack = {}, []
     for index, token in enumerate(active):
         value = token.group()
-        scope_at[index] = '.'.join(x for x in stack if x) or '<module>'
+        if token.lastgroup == 'string':
+            continue
+        if value in ('(', '[', '{'):
+            delimiter_stack.append(index)
+        elif value in (')', ']', '}'):
+            if delimiter_stack and active[delimiter_stack[-1]].group() == {')':'(', ']':'[', '}':'{'}[value]:
+                opening = delimiter_stack.pop()
+                pairs[opening] = index
+                pairs[index] = opening
+    regions, pending = [], None
+    for index, token in enumerate(active):
+        value = token.group()
         if value in ('function', 'class') and index+1 < len(active) and active[index+1].lastgroup == 'id':
             pending = active[index+1].group()
         elif value == '{':
-            stack.append(pending)
+            if pending and index in pairs:
+                regions.append(dict(start=index, end=pairs[index], name=pending, arrow=False))
             pending = None
-        elif value == '}' and stack:
-            stack.pop()
+        if value != '=' or index+2 >= len(active) or active[index+1].group() != '>':
+            continue
+        parameter_start = index-1
+        if parameter_start >= 0 and active[parameter_start].group() == ')':
+            parameter_start = pairs.get(parameter_start, -1)
+        elif parameter_start < 0 or active[parameter_start].lastgroup != 'id':
+            parameter_start = -1
+        binding_end = parameter_start-1
+        if binding_end >= 0 and active[binding_end].group() == 'async':
+            binding_end -= 1
+        name = None
+        if (binding_end >= 2 and active[binding_end].group() == '='
+                and active[binding_end-1].lastgroup == 'id'
+                and active[binding_end-2].group() in ('const', 'let', 'var')):
+            name = active[binding_end-1].group()
+        start, end = index+2, None
+        if active[start].group() == '{':
+            end = pairs.get(start)
+        else:
+            # Balanced nested expressions belong to this body; separators at
+            # its own level close it. Unmatched delimiters fail closed.
+            cursor = start
+            while cursor < len(active):
+                value = active[cursor].group()
+                if cursor > start and '\n' in content[active[cursor-1].end():active[cursor].start()]:
+                    # Without a full parser, an unparenthesized newline may
+                    # terminate the expression through ASI. Never give later
+                    # calls the arrow's confident identity in that case.
+                    name = None
+                if value in (';', ',', ')', ']', '}') and active[cursor].lastgroup != 'string':
+                    end = cursor-1
+                    break
+                if value in ('(', '[', '{') and active[cursor].lastgroup != 'string':
+                    if cursor not in pairs:
+                        break
+                    cursor = pairs[cursor]+1
+                    continue
+                cursor += 1
+            if cursor == len(active):
+                end = len(active)-1
+        if end is None or end < start:
+            diagnostics.append('Arrow scope boundary is unresolved; source identity is partial.')
+            continue
+        regions.append(dict(start=start, end=end, name=name, arrow=True))
+    # Compare enclosing region identity, not only its textual name. Repeated
+    # names in different named parents are valid; repeated siblings are not.
+    arrow_groups = {}
+    for region in regions:
+        if not region['arrow']:
+            continue
+        parents = tuple((other['start'], other['end']) for other in regions
+                        if other['start'] < region['start'] and other['end'] >= region['end'])
+        arrow_groups.setdefault((parents, region['name']), []).append(region)
+    for group in arrow_groups.values():
+        if len(group) > 1:
+            for region in group:
+                region['name'] = None
+    scope_at = {}
+    for index in range(len(active)):
+        enclosing = sorted((region for region in regions if region['start'] <= index <= region['end']),
+                           key=lambda region: (region['start'], -region['end']))
+        if any(region['name'] is None for region in enclosing):
+            scope_at[index] = '<unresolved>'
+        else:
+            scope_at[index] = '.'.join(region['name'] for region in enclosing) or '<module>'
 
     for i,t in enumerate(active):
         if t.lastgroup!='id' or (i and active[i-1].group()=='.'):
@@ -622,6 +698,8 @@ def javascript_events(content, rules):
                             rules,params,'javascript_lexical')
         for event in emitted:
             event.update(source_scope=scope_at[i], source_call=name)
+            if scope_at[i] == '<unresolved>':
+                diagnostics.append('Arrow scope identity is anonymous or ambiguous; finding scope is unresolved.')
             if any(x in name.lower() for x in ('pbkdf2','bcrypt','argon2','scrypt')):
                 event['snippet'] = name + '([password/salt arguments omitted])'
         events.extend(emitted)
