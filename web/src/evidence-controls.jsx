@@ -63,6 +63,12 @@ export function PlanningContext({data, onUpdated}) {
   const [edited, setEdited] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const requestRef = useRef(null);
+  useEffect(() => () => {
+    const pending = requestRef.current;
+    requestRef.current = null;
+    pending?.abort();
+  }, []);
   const findings = groups.find(([name])=>name===asset)?.[1] || [];
   if (!groups.length) return null;
   const describe = key => {
@@ -73,6 +79,7 @@ export function PlanningContext({data, onUpdated}) {
   };
   const confirm = async event => {
     event.preventDefault();
+    if (requestRef.current) return;
     setError('');
     const fields = {};
     for (const [key,,choices] of FIELDS) {
@@ -80,14 +87,24 @@ export function PlanningContext({data, onUpdated}) {
       fields[key] = choices ? edited[key] : Number(edited[key]);
     }
     if (!Object.keys(fields).length) { setError('Choose at least one known value to confirm. Blank values remain unchanged.'); return; }
+    const controller = new AbortController();
+    requestRef.current = controller;
     setBusy(true);
     try {
-      const response = await fetch('/api/reassess', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scan_id:data.metadata.scan_id,overrides:findings.map(f=>({finding_id:f.id,...fields}))})});
+      const response = await fetch('/api/reassess', {signal:controller.signal,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scan_id:data.metadata.scan_id,overrides:findings.map(f=>({finding_id:f.id,...fields}))})});
       const result = await response.json();
+      if (requestRef.current !== controller || controller.signal.aborted) return;
       if (!response.ok || result.error) throw Error(result.error || 'Planning update failed.');
       onUpdated(result);
-    } catch (failure) { setError(failure.message || 'Unable to update planning context.'); }
-    finally { setBusy(false); }
+    } catch (failure) {
+      if (requestRef.current === controller && !controller.signal.aborted)
+        setError(failure.message || 'Unable to update planning context.');
+    } finally {
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setBusy(false);
+      }
+    }
   };
   return <section className="release-panel planning-context" aria-labelledby="planning-heading">
     <div className="intel-panel-head"><h3 id="planning-heading">Confirm asset planning context</h3><span>ASSUMPTIONS / OWNER INPUT</span></div>

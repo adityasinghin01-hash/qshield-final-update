@@ -67,3 +67,50 @@ export default async function verifyDesktop(page) {
   assert((await page.locator('.incident-timeline').innerText()).includes('22:59 UTC'),'Initial OneCRL chronology missing');
   return {entry,dialog:'passed',reassessment:{count:request.overrides.length,newReport:true,zero:true,failurePreserved:true},scan:'success/failure passed',buttonFonts,navigation:'passed'};
 }
+
+// A context request belongs to the report that mounted its form. A later scan
+// must remain selected when that old request is finally delivered or fails.
+export async function verifyReassessmentLifetime(page) {
+  const outcomes = [];
+  await page.setViewportSize({width:1440,height:1000});
+  await page.emulateMedia({reducedMotion:'reduce'});
+  for (const outcome of ['success','failure']) {
+    await page.goto('http://127.0.0.1:8765');
+    await page.locator('#planning-heading').waitFor({timeout:5000});
+    let release, arrived, finished, delayed;
+    const gate=new Promise(resolve=>{release=resolve;});
+    const ready=new Promise(resolve=>{arrived=resolve;});
+    const delivered=new Promise(resolve=>{finished=resolve;});
+    await page.route('**/api/reassess', async route => {
+      try {
+        const response=await route.fetch();
+        delayed=await response.json();
+        arrived();
+        await gate;
+        await route.fulfill({status:outcome==='success'?200:409,contentType:'application/json',body:JSON.stringify(outcome==='success'?delayed:{error:'Obsolete controlled failure'})});
+      } finally { finished(); }
+    });
+    try {
+      await page.locator('#context-data_lifetime_years').fill('30');
+      await page.getByRole('button',{name:'Confirm context & reassess'}).click();
+      await ready;
+      const scanned=page.waitForResponse(r=>r.url().endsWith('/api/scan'),{timeout:5000});
+      await page.getByRole('button',{name:/Scan Repository/}).click();
+      const newer=await (await scanned).json();
+      await page.waitForFunction(id=>document.querySelector('#results-summary').textContent.includes(id),newer.metadata.scan_id,{timeout:5000});
+      release();
+      await delivered;
+      await page.waitForTimeout(150);
+      const displayed=await page.locator('#results-summary').innerText();
+      if (!displayed.includes(newer.metadata.scan_id) || displayed.includes(delayed.metadata.scan_id))
+        throw Error('Obsolete '+outcome+' reassessment replaced newer scan '+newer.metadata.scan_id);
+      if (await page.getByRole('alert').filter({hasText:'Obsolete controlled failure'}).count())
+        throw Error('Obsolete request failure changed the current report UI');
+      outcomes.push({outcome,newerId:newer.metadata.scan_id,delayedId:delayed.metadata.scan_id,newerPreserved:true});
+    } finally {
+      release();
+      await page.unroute('**/api/reassess');
+    }
+  }
+  return outcomes;
+}
