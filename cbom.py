@@ -486,6 +486,12 @@ def export_cbom(
         {"name": "qshield:version", "value": metadata_in.get("version", QSHIELD_TOOL_VERSION)},
         {"name": "qshield:scenario", "value": str(metadata_in.get("scenario", "central"))},
     ]
+    for key in ('scan_id', 'scan_finished_at', 'is_demo'):
+        if key in metadata_in:
+            metadata_props.append({"name": "qshield:"+key, "value": str(metadata_in[key])})
+    rules_version = clean_scan.get('risk_assessment', {}).get('metadata', {}).get('ruleset_version')
+    if rules_version:
+        metadata_props.append({"name": "qshield:ruleset_version", "value": str(rules_version)})
     if metadata_in.get("crqc_horizon_years") is not None:
         metadata_props.append({"name": "qshield:crqc_horizon_years", "value": str(metadata_in["crqc_horizon_years"])})
     if targets_in.get("host"):
@@ -684,12 +690,13 @@ def write_cbom_file(
 def validate_cbom_schema(
     cbom_dict: Dict[str, Any],
     schema_path: Optional[Union[str, Path]] = None,
-) -> Tuple[bool, Optional[str]]:
+) -> Tuple[Optional[bool], Optional[str]]:
     """
-    Validates a CBOM dictionary against the official CycloneDX 1.6 JSON Schema.
-    Uses 'jsonschema' if installed. If jsonschema is not installed or schema is unavailable,
-    performs comprehensive structural validation.
-    Returns (is_valid, error_message).
+    Validate against CycloneDX 1.6 using bundled, offline schema resources.
+
+    Return (True, None) only after formal validation, (False, reason) for an
+    invalid document, or (None, reason) when validation could not be performed.
+    Explicit schema paths never silently fall back to another schema.
     """
     # 1. Built-in fast structural checks
     if not isinstance(cbom_dict, dict):
@@ -698,42 +705,41 @@ def validate_cbom_schema(
         return False, f"Expected bomFormat 'CycloneDX', got {cbom_dict.get('bomFormat')!r}"
     if cbom_dict.get("specVersion") != "1.6":
         return False, f"Expected specVersion '1.6', got {cbom_dict.get('specVersion')!r}"
-    if not re.match(r"^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", cbom_dict.get("serialNumber", "")):
+    serial = cbom_dict.get("serialNumber")
+    if not isinstance(serial, str) or not re.fullmatch(r"urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", serial):
         return False, f"Invalid RFC 4122 serialNumber: {cbom_dict.get('serialNumber')!r}"
 
-    # 2. Try formal jsonschema validation if available
     try:
-        import jsonschema  # type: ignore
-
-        # Resolve schema path
-        resolved_schema = None
-        if schema_path and Path(schema_path).exists():
-            resolved_schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
-        else:
-            # Check local default schemas in docs or current directory
-            candidates = [
-                Path(__file__).resolve().parent / "docs" / "bom-1.6.schema.json",
-                Path(__file__).resolve().parent / "bom-1.6.schema.json",
-                Path(r"C:\Users\Kartik\.gemini\antigravity-ide\brain\87eb81f9-b0df-4a16-b4ff-6c68016e58cf\.system_generated\steps\74\content.md"),
-            ]
-            for c in candidates:
-                if c.exists():
-                    try:
-                        text = c.read_text(encoding="utf-8")
-                        idx = text.find('{"$schema"')
-                        if idx != -1:
-                            resolved_schema = json.loads(text[idx:])
-                            break
-                    except Exception:
-                        continue
-
-        if resolved_schema:
-            try:
-                jsonschema.validate(instance=cbom_dict, schema=resolved_schema)
-                return True, None
-            except jsonschema.ValidationError as err:
-                return False, f"Schema validation error at {list(err.path)}: {err.message}"
+        from jsonschema import Draft7Validator, SchemaError, ValidationError
+        from referencing import Registry, Resource
+        from referencing.exceptions import CannotDetermineSpecification, NoSuchResource, Unresolvable
     except ImportError:
-        pass
+        return None, "Not formally validated: install requirements-dev.txt (jsonschema)."
 
+    docs = Path(__file__).resolve().parent / "docs"
+    selected = Path(schema_path) if schema_path is not None else docs / "bom-1.6.schema.json"
+    try:
+        schema = json.loads(selected.read_text(encoding="utf-8"))
+        Draft7Validator.check_schema(schema)
+
+        def deny_retrieval(uri):
+            raise NoSuchResource(ref=uri)
+
+        registry = Registry(retrieve=deny_retrieval)
+        # Register only the bundled allowlist. Unknown references never trigger
+        # filesystem or network retrieval, including references in custom schemas.
+        for path in (docs / "spdx.schema.json", docs / "jsf-0.82.schema.json"):
+            contents = json.loads(path.read_text(encoding="utf-8"))
+            resource = Resource.from_contents(contents)
+            registry = registry.with_resource(contents['$id'], resource)
+            registry = registry.with_resource(contents['$id'].replace('http:', 'https:', 1), resource)
+        resource = Resource.from_contents(schema)
+        registry = registry.with_resource(schema.get('$id', selected.resolve().as_uri()), resource)
+        validator = Draft7Validator(schema, registry=registry,
+                                    format_checker=Draft7Validator.FORMAT_CHECKER)
+        validator.validate(cbom_dict)
+    except ValidationError as err:
+        return False, f"Schema validation error at {list(err.path)}: {err.message}"
+    except (OSError, ValueError, SchemaError, CannotDetermineSpecification, Unresolvable) as err:
+        return None, f"Not formally validated: schema or offline reference unavailable ({type(err).__name__})."
     return True, None

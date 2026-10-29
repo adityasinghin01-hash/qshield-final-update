@@ -20,6 +20,7 @@ and unsafe subprocess execution.
 from __future__ import annotations
 
 import ipaddress
+import copy
 import json
 import os
 import re
@@ -229,8 +230,9 @@ def record_scan_history(scan_result: Dict[str, Any], flow_type: str = "full") ->
     metadata["scan_id"] = scan_id
     metadata["flow_type"] = flow_type
 
-    summary = scan_result.get("risk_assessment", {}).get("summary", {})
-    targets = metadata.get("targets", {})
+    snapshot = copy.deepcopy(scan_result)
+    summary = snapshot.get("risk_assessment", {}).get("summary", {})
+    targets = snapshot.get("metadata", {}).get("targets", {})
 
     target_labels = []
     if targets.get("repo"):
@@ -252,7 +254,7 @@ def record_scan_history(scan_result: Dict[str, Any], flow_type: str = "full") ->
         "total_assessments": summary.get("total_assessments", 0),
         "severity_counts": summary.get("severity", {}),
         "track_counts": summary.get("track", {}),
-        "full_data": scan_result,
+        "full_data": snapshot,
     }
 
     with SCAN_HISTORY_LOCK:
@@ -266,7 +268,7 @@ def record_scan_history(scan_result: Dict[str, Any], flow_type: str = "full") ->
 def get_scan_history_list() -> List[Dict[str, Any]]:
     """Returns summary cards of recorded scans for the history dashboard."""
     with SCAN_HISTORY_LOCK:
-        return [
+        return copy.deepcopy([
             {
                 "id": r["id"],
                 "timestamp": r["timestamp"],
@@ -281,7 +283,7 @@ def get_scan_history_list() -> List[Dict[str, Any]]:
                 "track_counts": r["track_counts"],
             }
             for r in SCAN_HISTORY
-        ]
+        ])
 
 
 def get_scan_by_id(scan_id: str) -> Optional[Dict[str, Any]]:
@@ -289,7 +291,7 @@ def get_scan_by_id(scan_id: str) -> Optional[Dict[str, Any]]:
     with SCAN_HISTORY_LOCK:
         for r in SCAN_HISTORY:
             if r["id"] == scan_id:
-                return r["full_data"]
+                return copy.deepcopy(r["full_data"])
     return None
 
 
@@ -617,10 +619,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         # 2. API: Demo Data
         if path == "/api/demo":
             demo_data = _get_demo_data()
-            # Automatically record into history as baseline if history is empty
-            with SCAN_HISTORY_LOCK:
-                if not SCAN_HISTORY:
-                    record_scan_history(demo_data, flow_type="demo")
+            # Every displayed demo needs its own immutable export identity.
+            record_scan_history(demo_data, flow_type="demo")
             self.send_json(200, demo_data)
             return
 
@@ -657,7 +657,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 return
             if not scan_id:
                 with SCAN_HISTORY_LOCK:
-                    scan_data = SCAN_HISTORY[0].get("full_data") if SCAN_HISTORY else None
+                    scan_data = copy.deepcopy(SCAN_HISTORY[0].get("full_data")) if SCAN_HISTORY else None
 
             if not scan_data:
                 self.send_error_json(404, "No scan data available to export.")

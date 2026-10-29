@@ -1,4 +1,5 @@
 """Shared result normalization and portable reporting for CLI and dashboard."""
+import json
 from typing import Any, Dict, Optional
 from crypto_evidence import mlkem_group, redact_evidence
 
@@ -152,6 +153,7 @@ def render_markdown(
     min_severity: Optional[str] = None,
 ) -> str:
     """Render the current result dictionary without ANSI escapes or a second assessment."""
+    scan_result = redact_evidence(scan_result)
     meta = scan_result.get('metadata', {})
     summary = scan_result.get('risk_assessment', {}).get('summary', {})
     assessments = scan_result.get('risk_assessment', {}).get('assessments', [])
@@ -167,6 +169,7 @@ def render_markdown(
     targets = meta.get('targets', {})
     lines = ['# Q-SHIELD Cryptographic Scan Report', '',
              '**Data:** ' + ('Illustrative demo' if meta.get('is_demo') else 'Scan results'),
+             '**Scan ID:** ' + inline(meta.get('scan_id')),
              '**Finished:** ' + inline(meta.get('scan_finished_at')),
              '**Repository:** ' + inline(targets.get('repo')),
              '**TLS host:** ' + inline(targets.get('host')),
@@ -179,7 +182,8 @@ def render_markdown(
     lines += ['', f'**Total assessments:** {len(assessments)}',
               f'**Displayed assessments:** {len(shown)} (track: {track_filter or "all"}; minimum severity: {min_severity or "info"})',
               '**Heuristic posture score:** ' + inline(summary.get('readiness_score')),
-              '**Unknown findings:** ' + inline(summary.get('unknown_count')),
+              '**Unknown findings:** ' + inline(summary.get('unknown_finding_count')),
+              '**Unknown evidence entries:** ' + inline(summary.get('unknown_count')),
               '**Unresolved critical findings:** ' + inline(summary.get('unresolved_critical_count')),
               '**Distinct affected assets:** ' + inline(summary.get('affected_asset_counts', {}).get('total')),
               'Posture scores are planning aids, not compliance certification.', '']
@@ -233,5 +237,18 @@ def render_markdown(
             lines.append('- **Threat model:** ' + inline(a['threat_analysis']['details']))
         if rec.get('alternatives'):
             lines.append('- **Alternatives:** ' + ', '.join(inline(x) for x in rec['alternatives']))
+        finding = next((f for f in scan_result.get('inventory', {}).get('findings', [])
+                        if f.get('id') == a.get('finding_id')), {})
+        attrs = finding.get('attributes', {})
+        snippet = attrs.get('code_snippet')
+        if snippet:
+            # Indented blocks keep untrusted source, including Markdown fences
+            # and HTML, literal. Redaction above applies to all export paths.
+            lines += ['', '**Evidence:**', '']
+            lines.extend('    ' + line for line in str(snippet).splitlines())
+        if attrs.get('parameters'):
+            lines += ['', '**Observed parameters:**', '']
+            lines.extend('    ' + line for line in json.dumps(
+                attrs['parameters'], indent=2, sort_keys=True).splitlines())
         lines.append('')
     return '\n'.join(lines) + '\n'

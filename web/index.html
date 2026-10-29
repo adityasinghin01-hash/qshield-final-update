@@ -333,25 +333,29 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
         URL.revokeObjectURL(url);
       };
 
-      const handleExportCbom = async () => {
+      const handleExportArtifact = async (format, extension) => {
         if (!scanData) return;
+        setErrorMessage('');
         try {
-          const res = await fetch('/api/export?format=cbom');
-          if (res.ok) {
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `qshield_cbom_${Date.now()}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-          } else {
-            window.location.href = '/api/export?format=cbom';
+          const scanId = scanData.metadata?.scan_id;
+          if (!scanId) throw Error('This report has no export identity. Run a scan or reload the demo.');
+          const res = await fetch('/api/export?' + new URLSearchParams({format, id:scanId}));
+          if (!res.ok) {
+            const failure = await res.json();
+            throw Error(failure.error || 'Could not export the displayed scan.');
           }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `qshield_${format}_${scanId}.${extension}`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
         } catch (e) {
-          window.location.href = '/api/export?format=cbom';
+          setErrorMessage(e.message || 'Could not export the displayed scan.');
         }
       };
+      const handleExportCbom = () => handleExportArtifact('cbom', 'json');
 
       // Filtered assessments
       const assessments = scanData?.risk_assessment?.assessments || [];
@@ -385,13 +389,7 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
       const totalAssessments = summary.total_assessments || 0;
 
       const readinessScore = summary.readiness_score;
-      const handleExportMarkdown = () => {
-        if (!scanData) return;
-        const lines = ['# Q-SHIELD scan report', '', '**Data:** ' + (scanData.metadata?.is_demo ? 'Illustrative demo' : 'Scan results'), '**Finished:** ' + (scanData.metadata?.scan_finished_at || 'Unknown'), '**Scenario:** ' + (scanData.metadata?.scenario || 'central'), ''];
-        assessments.forEach(a=>lines.push('## '+a.title, '', '- Algorithm: '+a.algorithm, '- Asset: '+a.asset, '- Severity: '+a.severity, '- Action: '+(a.recommendation?.action||'Review evidence'), ''));
-        if (scanData.metadata?.errors?.length) lines.push('## Scan diagnostics', JSON.stringify(scanData.metadata.errors, null, 2));
-        const url=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/markdown'}));const a=document.createElement('a');a.href=url;a.download='qshield-report.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-      };
+      const handleExportMarkdown = () => handleExportArtifact('markdown', 'md');
 
       return (
         <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
