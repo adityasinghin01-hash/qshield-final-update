@@ -158,9 +158,9 @@ class TestIaCAdversarial(unittest.TestCase):
         with patch('iac_scanner._link',return_value=True), patch('iac_scanner.os.open',side_effect=AssertionError('must not follow')):
             data=scan_iac(path)
         self.assertEqual(data['diagnostics'][0]['code'],'symlink')
-        with patch('iac_scanner._link',side_effect=lambda candidate: candidate==self.root), patch('iac_scanner.os.open',side_effect=AssertionError('must not follow ancestor')):
-            data=scan_iac(path)
-        self.assertEqual(data['diagnostics'][0]['code'],'symlink')
+        # Explicit root ancestry may contain aliases; real alias coverage lives in
+        # test_audit_portability. Only the selected leaf and descendants are links
+        # the scanner excludes.
         with patch.object(Path,'is_symlink',return_value=False), patch.object(Path,'is_junction',return_value=True,create=True):
             self.assertTrue(_link(path))
 
@@ -209,10 +209,7 @@ class TestIaCAdversarial(unittest.TestCase):
         self.assertNotIn('SYNTHETIC_PRIVATE_TOKEN',json.dumps(data))
 
     def test_directory_enumeration_failures_are_diagnostics(self):
-        def fail_walk(target,**options):
-            options['onerror'](PermissionError('SYNTHETIC_PRIVATE_ERROR'))
-            return iter(())
-        with patch('iac_scanner.os.walk',side_effect=fail_walk):
+        with patch('iac_scanner.os.listdir',side_effect=PermissionError('SYNTHETIC_PRIVATE_ERROR')):
             data=scan_iac(self.root)
         self.assertEqual(data['coverage_status'],'partial')
         self.assertNotIn('SYNTHETIC_PRIVATE_ERROR',json.dumps(data))

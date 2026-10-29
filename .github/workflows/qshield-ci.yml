@@ -5,10 +5,15 @@ on:
     branches:
       - main
       - integration
+      - "version-*"
+      - Aditya-Singh-AIML
   pull_request:
     branches:
       - main
       - integration
+      - "version-*"
+      - Aditya-Singh-AIML
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,7 +44,17 @@ jobs:
 
       - name: Bytecode compilation & syntax check
         run: |
-          python -m py_compile main.py cli_demo.py scan_results.py test_cli.py tls_scanner.py code_scanner.py risk_engine.py adapters.py dashboard.py demo_workflow.py demo_migration.py test_integration.py test_risk_engine.py test_dashboard_api.py test_release_integration.py sample_vulnerable_app/auth.py sample_vulnerable_app/crypto_service.py sample_remediated_app/auth.py sample_remediated_app/crypto_service.py
+          python - <<'PYTHON'
+          import pathlib
+          import py_compile
+          import subprocess
+
+          # Compile checked-in Python modules/tests, not generated or scanned inputs.
+          paths = subprocess.check_output(["git", "ls-files", "-z", "--", "*.py"]).decode().split("\0")
+          for name in filter(None, paths):
+              if pathlib.Path(name).is_file():
+                  py_compile.compile(name, doraise=True)
+          PYTHON
 
       - name: Run automated test suite
         run: |

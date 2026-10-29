@@ -34,6 +34,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from safe_paths import nofollow_supported, open_directory, selected_root
+
 
 class Confidence(str, Enum):
     HIGH = "HIGH"
@@ -674,21 +676,18 @@ class CodeScanner:
                 runtime_execution=False, library_defaults=False, symlinks='excluded; no-follow opening'))
         self.source_root = path if path.is_dir() and not path.is_symlink() else path.parent
         try:
-            if path.is_symlink():
+            if not nofollow_supported():
+                self.coverage['capabilities']['symlinks'] = 'safe no-follow opening unsupported on this platform; no files read'
+                self._exclude(path, 'unsupported_platform')
+            elif path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
                 self._exclude(path, 'symbolic_link')
-            elif path.is_dir():
-                fd = self._open_directory(path)
-                try:
-                    self._walk_directory(fd, path)
-                finally:
-                    os.close(fd)
             else:
-                fd = self._open_directory(path.parent)
-                try:
-                    self._scan_file(path, fd)
-                finally:
-                    os.close(fd)
-        except OSError:
+                # The user authorized this root, including aliases in its ancestry.
+                # Keep the selected leaf unresolved so no-follow still rejects links.
+                path = selected_root(path)
+                self.source_root = path if path.is_dir() else path.parent
+                self._scan_selected_path(path)
+        except (OSError, RuntimeError):
             self._exclude(path, 'unsafe_or_unreadable_path')
         self.coverage.update(attempted_files=self.attempted_files_count,
                              scanned_files=self.scanned_files_count,
@@ -698,20 +697,21 @@ class CodeScanner:
         self.coverage['unresolved'] = list(self.diagnostics)
         return self.findings
 
-    @staticmethod
-    def _open_directory(path):
-        """Open each ancestor relative to its fd; no symlink component is followed."""
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-        fd = os.open('/', flags)
-        try:
-            for part in path.parts[1:]:
-                child = os.open(part, flags, dir_fd=fd)
+    def _scan_selected_path(self, path):
+        if path.is_dir():
+            fd = self._open_directory(path)
+            try:
+                self._walk_directory(fd, path)
+            finally:
                 os.close(fd)
-                fd = child
-            return fd
-        except BaseException:
-            os.close(fd)
-            raise
+        else:
+            fd = self._open_directory(path.parent)
+            try:
+                self._scan_file(path, fd)
+            finally:
+                os.close(fd)
+
+    _open_directory = staticmethod(open_directory)
 
     def _relative(self, path):
         return path.relative_to(self.source_root).as_posix() or '.'

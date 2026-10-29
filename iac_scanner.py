@@ -6,6 +6,7 @@ exception messages are intentionally excluded to avoid disclosing secrets.
 """
 from __future__ import annotations
 
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import re
 import shlex
 import stat
 
+from safe_paths import nofollow_supported, open_directory, selected_root
 from risk_engine import Finding
 from iac_policies import (CATALOG_VERSION, CF_LEGACY, CF_MODERN, CF_SOURCE, ELB_LEGACY,
                           ELB_MODERN, ELB_SOURCE, INGRESS_SOURCE, RULES)
@@ -69,6 +71,7 @@ class IaCScanner:
                 'limit': 'File count or parser structural limit reached.',
                 'dependency': 'Required safe parser unavailable; install requirements.txt.',
                 'invalid_target': 'Target is absent, unsupported, or contains parent traversal.',
+                'unsupported_platform': 'Safe descriptor-anchored no-follow opening is unavailable on this platform; no files read.',
             }[code], 'partial': partial})
         if partial:
             self.result['coverage_status'] = 'partial'
@@ -330,63 +333,97 @@ class IaCScanner:
         else:
             self.observe(file,line,field,'unknown')
 
+    def _candidates(self, target, directory):
+        """Yield entries with their still-open parent descriptor; never follow links."""
+        def walk(fd, folder):
+            for name in sorted(os.listdir(fd)):
+                child = folder / name
+                try:
+                    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    if stat.S_ISLNK(info.st_mode):
+                        self.diagnostic(child.relative_to(target).as_posix(), 'symlink')
+                    elif stat.S_ISDIR(info.st_mode):
+                        if name in IGNORE_DIRS:
+                            continue
+                        nested = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                        try:
+                            yield from walk(nested, child)
+                        finally:
+                            os.close(nested)
+                    else:
+                        yield child, fd, info
+                except OSError:
+                    self.diagnostic(child.relative_to(target).as_posix(), 'unreadable')
+        fd = open_directory(target if directory else target.parent)
+        try:
+            if directory:
+                yield from walk(fd, target)
+            else:
+                yield target, fd, os.stat(target.name, dir_fd=fd, follow_symlinks=False)
+        finally:
+            os.close(fd)
+
     def scan(self, target):
         self._reset()
-        target=Path(target)
-        if '..' in target.parts or not target.exists():
-            self.diagnostic('<target>','invalid_target'); return self.result
-        if any(_link(parent) for parent in (target, *target.parents)):
-            self.diagnostic('<target>','symlink'); return self.result
-        root=target.resolve() if target.is_dir() else target.resolve().parent
-        def candidates():
-            if target.is_file(): yield target; return
-            for folder,dirs,files in os.walk(target,followlinks=False,
-                                            onerror=lambda error: self.diagnostic('<directory>','unreadable')):
-                for name in list(dirs):
-                    child=Path(folder)/name
-                    if name in IGNORE_DIRS:
-                        dirs.remove(name)
-                    elif _link(child):
-                        dirs.remove(name); self.diagnostic(str(child.relative_to(target)),'symlink')
-                for name in sorted(files): yield Path(folder)/name
-        count=0
-        for path in candidates():
-            file=path.relative_to(target).as_posix() if target.is_dir() else path.name
-            if '.tfstate' in path.name.lower() or path.suffix.lower()=='.tfvars':
-                self.result['summary']['excluded_files']+=1
-                self.diagnostic(file,'excluded_state',partial=False); continue
-            if not is_iac_file(path): continue
-            count+=1
-            if count>MAX_FILES:
-                self.diagnostic('<scope>','limit'); break
-            self.result['summary']['attempted_files']+=1
-            try:
-                if _link(path) or not path.resolve().is_relative_to(root):
-                    self.diagnostic(file,'symlink'); continue
-                before=path.stat(follow_symlinks=False)
-                if not stat.S_ISREG(before.st_mode):
-                    self.diagnostic(file,'unreadable'); continue
-                if before.st_size>MAX_BYTES:
-                    self.diagnostic(file,'large_input'); continue
-                descriptor=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_BINARY',0))
-                with os.fdopen(descriptor,'rb') as handle:
-                    opened=os.fstat(handle.fileno())
-                    if (opened.st_dev,opened.st_ino)!=(before.st_dev,before.st_ino):
-                        self.diagnostic(file,'unreadable'); continue
-                    data=handle.read(MAX_BYTES+1)
-                if len(data)>MAX_BYTES:
-                    self.diagnostic(file,'large_input'); continue
-                text=data.decode('utf-8-sig')
-                suffix=path.suffix.lower()
-                analyzed=(self.yaml(text,file) if suffix in ('.yaml','.yml') else
-                          self.terraform(text,file) if suffix=='.tf' else self.docker(text,file))
-                if analyzed is not False:
-                    self.result['summary']['scanned_files']+=1
-            except (OSError,UnicodeError):
-                self.diagnostic(file,'unreadable')
-        if self.result['summary']['attempted_files']==0 and target.is_file() and not self.result['summary']['excluded_files']:
-            self.diagnostic(target.name,'invalid_target')
-        self.result['summary']['total_findings']=len(self.result['findings'])
+        target = Path(target)
+        if '..' in target.parts:
+            self.diagnostic('<target>', 'invalid_target'); return self.result
+        if _link(target):
+            self.diagnostic('<target>', 'symlink'); return self.result
+        if not target.exists() or not (target.is_file() or target.is_dir()):
+            self.diagnostic('<target>', 'invalid_target'); return self.result
+        # Excluded single-file inputs never require opening any descriptor.
+        if target.is_file() and ('.tfstate' in target.name.lower() or target.suffix.lower() == '.tfvars'):
+            self.result['summary']['excluded_files'] += 1
+            self.diagnostic(target.name, 'excluded_state', partial=False); return self.result
+        if not nofollow_supported():
+            self.diagnostic('<target>', 'unsupported_platform'); return self.result
+        try:
+            target = selected_root(target)
+            directory = target.is_dir()
+            count = 0
+            with closing(self._candidates(target, directory)) as entries:
+                for path, parent_fd, before in entries:
+                    file = path.relative_to(target).as_posix() if directory else path.name
+                    if '.tfstate' in path.name.lower() or path.suffix.lower() == '.tfvars':
+                        self.result['summary']['excluded_files'] += 1
+                        self.diagnostic(file, 'excluded_state', partial=False); continue
+                    if not is_iac_file(path):
+                        continue
+                    count += 1
+                    if count > MAX_FILES:
+                        self.diagnostic('<scope>', 'limit'); break
+                    self.result['summary']['attempted_files'] += 1
+                    try:
+                        if stat.S_ISLNK(before.st_mode):
+                            self.diagnostic(file, 'symlink'); continue
+                        if not stat.S_ISREG(before.st_mode):
+                            self.diagnostic(file, 'unreadable'); continue
+                        if before.st_size > MAX_BYTES:
+                            self.diagnostic(file, 'large_input'); continue
+                        descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                             dir_fd=parent_fd)
+                        with os.fdopen(descriptor, 'rb') as handle:
+                            opened = os.fstat(handle.fileno())
+                            if (not stat.S_ISREG(opened.st_mode) or
+                                (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
+                                self.diagnostic(file, 'unreadable'); continue
+                            data = handle.read(MAX_BYTES + 1)
+                        if len(data) > MAX_BYTES:
+                            self.diagnostic(file, 'large_input'); continue
+                        text = data.decode('utf-8-sig')
+                        suffix = path.suffix.lower()
+                        analyzed = (self.yaml(text, file) if suffix in ('.yaml', '.yml') else
+                                    self.terraform(text, file) if suffix == '.tf' else self.docker(text, file))
+                        if analyzed is not False:
+                            self.result['summary']['scanned_files'] += 1
+                    except (OSError, UnicodeError):
+                        self.diagnostic(file, 'unreadable')
+            if self.result['summary']['attempted_files'] == 0 and not directory and not self.result['summary']['excluded_files']:
+                self.diagnostic(target.name, 'invalid_target')
+        except (OSError, RuntimeError):
+            self.diagnostic('<target>', 'unreadable')
+        self.result['summary']['total_findings'] = len(self.result['findings'])
         return self.result
 
 
