@@ -63,6 +63,16 @@ class FormalValidationTests(unittest.TestCase):
         self.assertIsNone(valid)
         self.assertTrue(reason)
 
+    def test_unused_unknown_schema_reference_is_still_unavailable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            schema = Path(folder)/'schema.json'
+            schema.write_text(json.dumps({'$schema': 'http://json-schema.org/draft-07/schema#',
+                                         'properties': {'not_present': {'$ref': 'https://untrusted.invalid/schema'}}}))
+            with patch('socket.create_connection', side_effect=AssertionError('schema network access')):
+                valid, reason = cbom.validate_cbom_schema(self.bom, schema)
+        self.assertIsNone(valid)
+        self.assertTrue(reason)
+
     def test_malformed_serial_number_is_invalid_not_exception(self):
         valid, error = cbom.validate_cbom_schema({**self.bom, 'serialNumber': None})
         self.assertIs(valid, False)

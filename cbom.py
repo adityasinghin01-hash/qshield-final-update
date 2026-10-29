@@ -22,6 +22,7 @@ import re
 import sys
 import uuid
 from pathlib import Path
+from urllib.parse import urljoin
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 # Local redaction and identities
@@ -726,6 +727,7 @@ def validate_cbom_schema(
             raise NoSuchResource(ref=uri)
 
         registry = Registry(retrieve=deny_retrieval)
+        schema_resources = []
         # Register only the bundled allowlist. Unknown references never trigger
         # filesystem or network retrieval, including references in custom schemas.
         for path in (docs / "spdx.schema.json", docs / "jsf-0.82.schema.json"):
@@ -733,8 +735,27 @@ def validate_cbom_schema(
             resource = Resource.from_contents(contents)
             registry = registry.with_resource(contents['$id'], resource)
             registry = registry.with_resource(contents['$id'].replace('http:', 'https:', 1), resource)
+            schema_resources.append((contents, contents['$id']))
         resource = Resource.from_contents(schema)
-        registry = registry.with_resource(schema.get('$id', selected.resolve().as_uri()), resource)
+        schema_uri = schema.get('$id', selected.resolve().as_uri())
+        registry = registry.with_resource(schema_uri, resource).crawl()
+        schema_resources.append((schema, schema_uri))
+
+        def check_references(node, base):
+            if isinstance(node, dict):
+                base = urljoin(base, node.get('$id', ''))
+                if '$ref' in node:
+                    registry.resolver(base_uri=base).lookup(node['$ref'])
+                for value in node.values():
+                    check_references(value, base)
+            elif isinstance(node, list):
+                for value in node:
+                    check_references(value, base)
+
+        # Check the whole resource set, including unused definitions/optional
+        # branches. Formal success requires a self-contained schema graph.
+        for contents, base in schema_resources:
+            check_references(contents, base)
         validator = Draft7Validator(schema, registry=registry,
                                     format_checker=Draft7Validator.FORMAT_CHECKER)
         validator.validate(cbom_dict)
