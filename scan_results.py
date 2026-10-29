@@ -49,28 +49,57 @@ def post_process_scan_result(scan_result: Dict[str, Any]) -> Dict[str, Any]:
             add(fid,'DEPRECATED_TLS_PROTOCOL','Obsolete protocol '+str(proto)+' accepted',
                 'conventional','high',str(proto)+' is obsolete; update the server protocol policy.',
                 'Disable '+str(proto)+'; use TLS 1.3 or an appropriately configured TLS 1.2 deployment.')
+        if not attrs.get('is_comment') and attrs.get('match_type') == 'CONFIRMED_CALL':
+            from kdf_policy import assess_kdf
+            kdf = assess_kdf(item.get('algorithm', ''), attrs.get('parameters', {}))
+            if kdf:
+                attrs.setdefault('parameters', {})['kdf_assessment'] = kdf
+                if kdf['status'] == 'weak':
+                    add(fid, 'WEAK_KDF_PARAMETERS', 'Explicit password cost below policy',
+                        'conventional', 'high', '; '.join(kdf['reasons']),
+                        'Raise explicit cost to the digest-specific or memory/time OWASP profile; verify password-storage context.')
     assessments.sort(key=lambda a:a.get('priority',0),reverse=True)
     active = {fid:item for fid,item in inventory.items() if not item.get('attributes',{}).get('is_comment')
               and item.get('attributes',{}).get('match_type') not in ('IMPORT_STATEMENT','STRING_REFERENCE','COMMENT_ONLY')}
     assessed_ids={a.get('finding_id') for a in assessments}
     unknown=[]
+    unknown_reasons=[]
     from risk_engine import normalize_algorithm
     for fid,item in active.items():
         algorithm=item.get('algorithm','')
         normalized = normalize_algorithm(algorithm)
         missing_size = (normalized.family in ('aes','rsa','ec_key','ec_dsa','dsa')
                         and item.get('key_bits') is None and normalized.key_bits is None)
-        if fid not in assessed_ids or missing_size:
+        reasons=[]
+        if fid not in assessed_ids:
+            reasons.append('No assessment rule recognizes the observed identity')
+        if missing_size:
+            reasons.append('Required key size is not observed')
+        kdf = item.get('attributes', {}).get('parameters', {}).get('kdf_assessment')
+        if kdf:
+            reasons.extend(kdf.get('unknown_reasons', []))
+        if reasons:
             unknown.append(fid)
+            unknown_reasons.append(dict(finding_id=fid, reasons=reasons))
     errors=scan_result.get('metadata',{}).get('errors',[])
     modules=scan_result.get('modules') or {}
     partial = bool(errors) or (modules.get('code_scanner') or {}).get('coverage_status')=='partial'
+    source_coverage = (modules.get('code_scanner') or {}).get('coverage') or {}
+    unresolved = source_coverage.get('unresolved', [])
+    for diagnostic in unresolved:
+        unknown_reasons.append(dict(module='code_scanner', path=diagnostic.get('file'),
+                                    reasons=[diagnostic.get('error', 'Unresolved source syntax')]))
+    for exclusion in source_coverage.get('exclusions', []):
+        unknown_reasons.append(dict(module='code_scanner', path=exclusion.get('path'),
+                                    reasons=['Source excluded: ' + exclusion.get('reason', 'unknown')]))
     if not active:
         score=None
         label='N/A (Scan Failed / Host Unreachable)' if errors else 'No cryptographic operations observed'
         posture='failed' if errors else 'unassessed'
         if errors and all(e.get('module') == 'iac_scanner' for e in errors):
             label, posture = 'Incomplete IaC evidence / readiness undetermined', 'unknown'
+        if source_coverage and (source_coverage.get('scanned_files') or source_coverage.get('exclusions')) and partial:
+            label, posture = 'Incomplete source evidence / readiness undetermined', 'unknown'
     elif unknown or partial:
         score=None
         label='Incomplete evidence / readiness undetermined'
@@ -92,13 +121,28 @@ def post_process_scan_result(scan_result: Dict[str, Any]) -> Dict[str, Any]:
     result=scan_result.setdefault('risk_assessment',{})
     result['assessments']=assessments
     summary=result.setdefault('summary',{})
+    def asset_key(fid):
+        item = inventory[fid]
+        identity = item.get('attributes', {}).get('source_identity') or {}
+        return ('source:' + identity['relative_path'] if identity.get('relative_path') else item.get('asset'))
+
+    affected = {track: len({asset_key(a['finding_id']) for a in assessments
+                            if a.get('finding_id') in active and a.get('track') == track
+                            and a.get('severity') != 'info'}) for track in ('quantum','conventional')}
+    affected['total'] = len({asset_key(a['finding_id']) for a in assessments
+                             if a.get('finding_id') in active and a.get('severity') != 'info'})
+    affected['unknown'] = len({asset_key(fid) for fid in unknown})
     summary.update(total_assessments=len(assessments),
         severity={s:sum(a.get('severity')==s for a in assessments) for s in ('critical','high','medium','low','info')},
         track={t:sum(a.get('track')==t for a in assessments) for t in ('quantum','conventional')},
         confidence={c:sum(str(a.get('confidence','')).lower()==c for a in assessments) for c in ('low','medium','high')},
+        unknown_count=len(unknown_reasons), unknown_finding_count=len(unknown), unknown_reasons=unknown_reasons,
+        unresolved_critical_count=sum(active[fid].get('criticality') == 'critical' for fid in unknown),
+        affected_asset_counts=affected,
         readiness_score=score,readiness_label=label,readiness_posture=posture,
         coverage=dict(status='partial' if partial else 'unknown' if unknown else 'complete' if active else 'no_findings',
-                      unknown_finding_ids=unknown, note='Static and network observations are not security certification.'))
+                      unknown_finding_ids=unknown, source=source_coverage, unresolved_count=len(unresolved),
+                      note='Static and network observations are not security certification.'))
     return scan_result
 
 
@@ -135,7 +179,23 @@ def render_markdown(
     lines += ['', f'**Total assessments:** {len(assessments)}',
               f'**Displayed assessments:** {len(shown)} (track: {track_filter or "all"}; minimum severity: {min_severity or "info"})',
               '**Heuristic posture score:** ' + inline(summary.get('readiness_score')),
+              '**Unknown findings:** ' + inline(summary.get('unknown_count')),
+              '**Unresolved critical findings:** ' + inline(summary.get('unresolved_critical_count')),
+              '**Distinct affected assets:** ' + inline(summary.get('affected_asset_counts', {}).get('total')),
               'Posture scores are planning aids, not compliance certification.', '']
+    code = (scan_result.get('modules') or {}).get('code_scanner')
+    if code:
+        coverage = code.get('coverage', {})
+        lines += ['## Static source coverage', '', '**Coverage:** ' + inline(code.get('coverage_status')),
+                  f"**Files:** {coverage.get('scanned_files', 0)} analyzed / {coverage.get('attempted_files', 0)} attempted; "
+                  f"{coverage.get('supported_files', 0)} supported, {coverage.get('unsupported_files', 0)} unsupported; "
+                  f"{coverage.get('excluded_files', 0)} excluded entries.", '',
+                  'Bounded static observations do not establish runtime execution, defaults or complete repository safety.', '']
+        for entry in coverage.get('exclusions', []):
+            lines.append('- Excluded ' + inline(entry.get('path')) + ': ' + inline(entry.get('reason')))
+        for unknown in summary.get('unknown_reasons', []):
+            lines.append('- Unknown ' + inline(unknown.get('finding_id') or unknown.get('path')) + ': ' + inline('; '.join(unknown.get('reasons', []))))
+        lines.append('')
     errors = meta.get('errors', [])
     if errors:
         lines += ['## Scan diagnostics', '', 'This report contains failed or partially analyzed stages. Unresolved settings are not automatically vulnerabilities.', '']

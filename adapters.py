@@ -80,7 +80,7 @@ def convert_tls_results_to_findings(tls_data: Dict[str, Any]) -> List[Finding]:
                     },
                     "signature_algorithm": cert.get("signature", {}).get("algorithm"),
                     "serial_number": cert.get("serial_number"),
-                    "fingerprint_sha256": cert.get("fingerprints", {}).get("sha256"),
+                    "fingerprint_sha256": cert.get("fingerprint_sha256") or (cert.get("fingerprints") or {}).get("sha256"),
                     "likely_purpose": "TLS Server Authentication & Public Key Certificate",
                     "confidence": "HIGH",
                     "match_type": "X509_CERTIFICATE",
@@ -248,12 +248,18 @@ def convert_code_results_to_findings(code_data: Dict[str, Any]) -> List[Finding]
         asset_id = f"{file_path}:{line_no}" if file_path else f"code-finding-{idx}"
 
         # Deduplicate identical findings on the exact same asset location
-        dedup_key = (asset_id, algo_name, usage)
+        dedup_key = (asset_id, f.get('column_start'), algo_name, usage)
         if dedup_key in seen_dedup:
             continue
         seen_dedup.add(dedup_key)
 
         safe_snippet = redact_evidence({'match_type': match_type, 'code_snippet': code_snippet})['code_snippet']
+        from kdf_policy import safe_parameters, assess_kdf
+        parameters = safe_parameters(f.get('parameters', {}))
+        kdf = assess_kdf(algo_name, parameters) if match_type == 'CONFIRMED_CALL' else None
+        if kdf:
+            parameters['kdf_assessment'] = kdf
+            safe_snippet = '[Password/salt arguments omitted; see non-secret parameters]'
 
         # Determine criticality based on context
         criticality = "medium"
@@ -294,6 +300,10 @@ def convert_code_results_to_findings(code_data: Dict[str, Any]) -> List[Finding]
                 "runtime_note": f.get("runtime_note", ""),
                 "migration_advice": f.get("migration_advice"),
                 "cwe_id": f.get("cwe_id"),
+                "parameters": parameters,
+                "source_scope": f.get('source_scope'),
+                "source_call": f.get('source_call'),
+                "source_identity": f.get('source_identity'),
             }
         ))
 

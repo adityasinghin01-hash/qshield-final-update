@@ -24,6 +24,8 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import hashlib
+import stat
 import os
 import re
 import sys
@@ -72,6 +74,9 @@ class Finding:
     cwe_id: Optional[str] = None
     parameters: Dict[str, Any] = field(default_factory=dict)
     evidence_type: str = "static"
+    source_scope: str = "<module>"
+    source_call: str = ""
+    source_identity: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -90,6 +95,9 @@ class Finding:
             "cwe_id": self.cwe_id,
             "parameters": self.parameters,
             "evidence_type": self.evidence_type,
+            "source_scope": self.source_scope,
+            "source_call": self.source_call,
+            "source_identity": self.source_identity,
         }
 
 
@@ -637,6 +645,8 @@ class CodeScanner:
         ".idea",
         ".vscode",
     }
+    UNSUPPORTED_SOURCE_EXTENSIONS = {'.java', '.go', '.rs', '.c', '.h', '.cpp', '.cc',
+        '.hpp', '.cs', '.rb', '.php', '.swift', '.kt', '.kts', '.scala', '.dart', '.ex', '.exs'}
 
     def __init__(self, ignore_comments: bool = False, quantum_only: bool = False):
         self.ignore_comments = ignore_comments
@@ -646,41 +656,122 @@ class CodeScanner:
         self.scanned_lines_count = 0
         self.diagnostics = []
         self.attempted_files_count = 0
+        self.coverage = {}
 
     def scan_path(self, target_path: str | Path) -> List[Finding]:
         """Scan a file or recursively scan a directory."""
         self.findings = []
         self.scanned_files_count = self.scanned_lines_count = self.attempted_files_count = 0
         self.diagnostics = []
-        path = Path(target_path).resolve()
-        if not path.exists():
+        path = Path(os.path.abspath(target_path))
+        if not path.exists() and not path.is_symlink():
             raise FileNotFoundError(f"Path does not exist: {path}")
-
-        if path.is_file():
-            self._scan_file(path)
-        elif path.is_dir():
-            for root, dirs, files in os.walk(path):
-                # Filter out excluded directories
-                dirs[:] = [d for d in dirs if d not in self.IGNORE_DIRS]
-                for file_name in files:
-                    ext = Path(file_name).suffix.lower()
-                    if ext in self.SUPPORTED_EXTENSIONS:
-                        self._scan_file(Path(root) / file_name)
-
+        self.coverage = dict(supported_files=0, unsupported_files=0, attempted_files=0,
+            scanned_files=0, excluded_files=0, scanned_paths=[], exclusions=[], unresolved=[],
+            settings=dict(ignore_comments=self.ignore_comments, quantum_only=self.quantum_only),
+            capabilities=dict(python='AST with bounded literal and conservative alias resolution',
+                javascript='Lexical call recognition; no complete JS/TS AST or runtime analysis',
+                runtime_execution=False, library_defaults=False, symlinks='excluded; no-follow opening'))
+        self.source_root = path if path.is_dir() and not path.is_symlink() else path.parent
+        try:
+            if path.is_symlink():
+                self._exclude(path, 'symbolic_link')
+            elif path.is_dir():
+                fd = self._open_directory(path)
+                try:
+                    self._walk_directory(fd, path)
+                finally:
+                    os.close(fd)
+            else:
+                fd = self._open_directory(path.parent)
+                try:
+                    self._scan_file(path, fd)
+                finally:
+                    os.close(fd)
+        except OSError:
+            self._exclude(path, 'unsafe_or_unreadable_path')
+        self.coverage.update(attempted_files=self.attempted_files_count,
+                             scanned_files=self.scanned_files_count,
+                             excluded_files=len(self.coverage['exclusions']))
+        self.coverage['scanned_paths'].sort()
+        self.coverage['exclusions'].sort(key=lambda e: e['path'])
+        self.coverage['unresolved'] = list(self.diagnostics)
         return self.findings
 
-    def _scan_file(self, file_path: Path) -> None:
+    @staticmethod
+    def _open_directory(path):
+        """Open each ancestor relative to its fd; no symlink component is followed."""
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        fd = os.open('/', flags)
+        try:
+            for part in path.parts[1:]:
+                child = os.open(part, flags, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def _relative(self, path):
+        return path.relative_to(self.source_root).as_posix() or '.'
+
+    def _exclude(self, path, reason):
+        self.coverage['exclusions'].append(dict(path=self._relative(path), reason=reason))
+
+    def _walk_directory(self, fd, path):
+        for name in sorted(os.listdir(fd)):
+            child = path / name
+            try:
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    self._exclude(child, 'symbolic_link')
+                elif stat.S_ISDIR(info.st_mode):
+                    if name in self.IGNORE_DIRS:
+                        self._exclude(child, 'ignored_directory')
+                        continue
+                    nested = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                    try:
+                        self._walk_directory(nested, child)
+                    finally:
+                        os.close(nested)
+                elif stat.S_ISREG(info.st_mode):
+                    self._scan_file(child, fd)
+                elif child.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                    self._exclude(child, 'not_regular_file')
+            except OSError:
+                self._exclude(child, 'unsafe_or_unreadable_path')
+
+    def _scan_file(self, file_path: Path, directory_fd) -> None:
         """Scan an individual Python or JavaScript/TypeScript file."""
+        ext = file_path.suffix.lower()
+        if ext not in self.SUPPORTED_EXTENSIONS:
+            if ext in self.UNSUPPORTED_SOURCE_EXTENSIONS:
+                self.coverage['unsupported_files'] += 1
+                self._exclude(file_path, 'unsupported_source_extension')
+            return
+        self.coverage['supported_files'] += 1
         self.attempted_files_count += 1
         try:
-            # Bound resource use: skip files larger than 10MB
-            if file_path.stat().st_size > 10 * 1024 * 1024:
-                self.diagnostics.append({"file": str(file_path), "error": "Skipped file larger than 10 MiB"})
-                return
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
+            # A directory fd anchors the open; O_NOFOLLOW protects a swapped leaf.
+            fd = os.open(file_path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+            with os.fdopen(fd, 'rb') as f:
+                info = os.fstat(f.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    self._exclude(file_path, 'not_regular_file')
+                    return
+                if info.st_size > 10 * 1024 * 1024:
+                    self.diagnostics.append({"file": str(file_path), "error": "Skipped file larger than 10 MiB"})
+                    self._exclude(file_path, 'file_too_large')
+                    return
+                raw = f.read(10 * 1024 * 1024 + 1)
+                if len(raw) > 10 * 1024 * 1024:
+                    self._exclude(file_path, 'file_too_large')
+                    return
+                content = raw.decode('utf-8')
         except Exception as e:
             self.diagnostics.append({"file": str(file_path), "error": f"Unable to read file: {type(e).__name__}"})
+            self._exclude(file_path, 'unreadable_or_unsafe_source')
             return
 
         lines = content.splitlines()
@@ -691,6 +782,7 @@ class CodeScanner:
             self.diagnostics.append({"file": str(file_path), "error": "Unsupported source extension"})
             return
         self.scanned_files_count += 1
+        self.coverage['scanned_paths'].append(self._relative(file_path))
 
         if lang == "python":
             self._scan_python_file(file_path, content, lines)
@@ -705,6 +797,9 @@ class CodeScanner:
         self.diagnostics.extend({'file': str(file_path), 'error': error} for error in diagnostics)
         if any(error.startswith('Python parse error') for error in diagnostics):
             self.scanned_files_count -= 1
+            self.coverage['scanned_paths'].remove(self._relative(file_path))
+            self._exclude(file_path, 'parse_error')
+        occurrences = {}
         for event in events:
             comment = event.get('comment', False)
             if comment and self.ignore_comments:
@@ -723,7 +818,11 @@ class CodeScanner:
             # Mode selection alone identifies a mode, not a cipher or key width.
             if algorithm == 'AES-ECB Mode':
                 algorithm = 'Block cipher ECB'
-            params = event.get('parameters', {})
+            from kdf_policy import safe_parameters, assess_kdf
+            params = safe_parameters(event.get('parameters', {}))
+            kdf = assess_kdf(algorithm, params) if not comment and match_type == MatchType.CONFIRMED_CALL else None
+            if kdf:
+                params['kdf_assessment'] = kdf
             advice = rule.get('advice') if rule else None
             if algorithm in ('AES-GCM', 'AES'):
                 bits = params.get('key_bits')
@@ -733,6 +832,12 @@ class CodeScanner:
                           'Review the observed AES key width and authenticated mode; avoid nonce reuse.')
             if comment:
                 match_type = MatchType.COMMENT_ONLY
+            scope, call = event.get('source_scope', '<module>'), event.get('source_call', '')
+            anchor = (scope, call, match_type.value)
+            occurrences[anchor] = occurrences.get(anchor, 0) + 1
+            identity = dict(version=1, relative_path=self._relative(file_path), scope=scope,
+                            call=call, match_type=match_type.value, occurrence=occurrences[anchor])
+            identity['anchor'] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
             from crypto_evidence import redact_evidence
             finding = Finding(
                 file_path=str(file_path), line_number=event['line'], column_start=event['column'],
@@ -744,7 +849,8 @@ class CodeScanner:
                               'Static syntax evidence; execution and runtime parameters require verification.'),
                 migration_advice=advice,
                 cwe_id=rule.get('cwe') if rule else None,
-                parameters=params, evidence_type=event['evidence'])
+                parameters=params, evidence_type=event['evidence'], source_scope=scope,
+                source_call=call, source_identity=identity)
             if self.quantum_only and risk not in (QuantumRisk.CRITICAL_VULNERABLE, QuantumRisk.MODERATE_IMPACT):
                 continue
             self.findings.append(finding)
@@ -874,7 +980,8 @@ def scan_code(
     return {
         "target_path": str(path),
         "diagnostics": scanner.diagnostics,
-        "coverage_status": "partial" if scanner.diagnostics else "complete",
+        "coverage": scanner.coverage,
+        "coverage_status": "partial" if scanner.diagnostics or scanner.coverage['exclusions'] or quantum_only else "complete",
         "summary": {
             "attempted_files": scanner.attempted_files_count,
             "scanned_files": scanner.scanned_files_count,
