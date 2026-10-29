@@ -2,7 +2,7 @@
 
 > **For agentic workers:** Use subagent-driven-development for scoped implementation/review, or execute dependent tasks inline. The user explicitly authorized completing the remaining numbered fixes in chunks.
 
-**Goal:** Finish audit items 15–36 on the local branch `Aditya-Singh-AIML`, preserving all already committed 1–14 fixes.
+**Goal:** Finish audit items 15–36 except mobile-specific item33 (removed by user30Oct2026) on the local branch `Aditya-Singh-AIML`, preserving all already committed 1–14 fixes.
 
 **Architecture:** Keep the Python scanners/server and the existing React dashboard. Make source/IaC path handling portable without weakening descendant containment; retain individual TLS-probe provenance/outcomes; add explicit per-asset planning context and server-side reassessment of immutable scan snapshots. Build and vendor the existing frontend locally and improve the primary scan/results journey and accessibility.
 
@@ -62,15 +62,15 @@
 - [ ] Compile current JSX and Tailwind utilities into local static assets; local React runtime, local fonts (or retain visual style through packaged equivalents), no CDN/Babel runtime dependency. Keep React18 to avoid unnecessary migration. Node only for deterministic pinned rebuild; Python serves built assets.
 - [ ] Verify local asset graph and attribution, no external subresource requests, clean asset rebuild, schema/CLI/exportversion parity. Browser checks with external network blocked must render and run a local source scan. Commit Task4 files.
 
-### Task 5: Primary task UX, responsive layout, dialog accessibility and incident chronology (items 29–36; frontend integration for17–20)
+### Task 5: Primary desktop task UX, dialog accessibility and incident chronology (items 29–36; frontend integration for17–20)
 
 **Files:** existing frontend source/styles (nowbuiltlocally), controlled browser verification script/artifacts, README/release notes.
 
-**Design decision:** Preserve dark green/acid palette, existing typography/globe and meaningful chart interactions. The first desktop/mobile screen contains a compact scan entry and mode selector; long incident story moves to a secondary learning disclosure/view. Optional globe/horizon exploration follows actionable results. Report summary/evidence appear immediately after scan. Clearly label demo counters and carry scanidentity/type throughout.
+**Design decision:** Preserve dark green/acid palette, existing typography/globe and meaningful chart interactions. The first desktop screen contains a compact scan entry and mode selector; long incident story moves to a secondary learning disclosure/view. Optional globe/horizon exploration follows actionable results. Report summary/evidence appear immediately after scan. Clearly label demo counters and carry scanidentity/type throughout.
 
 - [ ] Integrate asset-planning controls from Task3 near evidence/inventory: perasset confirmed retention/trust/migration/exposure/criticality with defaults clearly assumed, submit server reassessment and show derived planning result/errors without replacing old scan on failure. Render TLS per-probe provenance/unknown coverage and leaf/chain/revocation boundaries fromTask2.
 - [ ] Move scan entry into firstscreen, conditionally show relevant input fields, keep optional scanning settings secondary. After success focus/scroll to results summary respecting reducedmotion; make evidence the next action. Retain history/export/compare functions and avoid misleading visuals.
-- [ ] Mobile no document horizontal overflow at360,390,768px. Contain tables/tab navigation locally, eliminate overflowing decorative elements, wrap long paths, increase small body/control/caption text and visible focus states. Do not hide necessary information to achieve viewport checks.
+- [ ] Desktop readability: wrap long evidence paths, retain usable table/tab navigation, increase small body/control/caption text and visible focus states. User removed mobile fixes on30Oct2026: no mobile-specific layout, overflow, breakpoint or viewport-testing work (item33 excluded). Preserve pre-existing responsive CSS.
 - [ ] Evidence inspector uses role=dialog, aria-modal, accessible title/close name, initialfocus, tab/shift-tab containment, Escape close, returnfocus to opener, scroll lock and background inertness. Verify keyboard behavior against actual rendered UI, not source-string assertions.
 - [ ] Incident timeline distinguishes17Oct initial OneCRL distribution from20Oct public response/additional releases; source links remain accurate and optional, and UI works offline without auto-fetching them.
-- [ ] Verify desktop/mobile/offline navigation, scan/failure/unknown/KDFcontext/reassess, exports/history/compare and dialog keyboard. Rebuild assets, run fullPython suite/schema/runtimechecks, obtain scoped and final independent review, resolve important findings, commit each finished chunk. Save final verification notes and refreshed portablebundle. Only retry origin push if current permission allows; if403 persists report exact limitation.
+- [ ] Verify desktop/offline navigation, scan/failure/unknown/KDFcontext/reassess, exports/history/compare and dialog keyboard. Rebuild assets, run fullPython suite/schema/runtimechecks, obtain scoped and final independent review, resolve important findings, commit each finished chunk. Save final verification notes and refreshed portablebundle. Only retry origin push if current permission allows; if403 persists report exact limitation.
