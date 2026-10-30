@@ -19,7 +19,7 @@ $env:QSHIELD_AI_TIMEOUT = '45'
 
 The model is deliberately required rather than hardcoded. `QSHIELD_AI_PROVIDER`
 defaults to `openai`; the timeout defaults to 45 seconds and accepts 1â€“120 seconds.
-The real adapter calls `https://api.openai.com/v1/responses` using a backend Bearer
+The real adapter uses the configured base URL and API protocol (OpenAI defaults to `/v1/responses`) using a backend Bearer
 header and structured JSON output, with `store: false`, no tools, no redirects,
 and no automatic retries. A ChatGPT subscription does not configure this API key.
 Keys never belong in browser scripts, scan reports, Git, or API request bodies.
@@ -132,3 +132,5 @@ node --test tests/q_patch_ui.test.cjs tests/cbom_export.test.cjs
 
 These packages are only for tests. The production dashboard keeps its existing
 React/CDN setup and has no new browser dependency or build step.
+
+For shared chat/gateway configuration and safe troubleshooting, see [AI configuration](AI_CONFIGURATION.md).

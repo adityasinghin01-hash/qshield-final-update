@@ -31,6 +31,7 @@ Or create a .env file in the project root:
   # INSERT YOUR OPENAI API KEY HERE:
   OPENAI_API_KEY=sk-...
 
+Chat and Q-Patch share ai_config.py. See docs/AI_CONFIGURATION.md.
 Configurable environment variables:
   - OPENAI_API_KEY        : OpenAI API Secret Key (REQUIRED for live AI)
   - QSHIELD_AI_PROVIDER   : "openai" (default), or "mock" (offline test mode)
@@ -59,100 +60,28 @@ CURRENT_DIR = Path(__file__).resolve().parent
 # LIGHTWEIGHT .ENV LOADER (NO EXTERNAL DEPENDENCIES)
 # ============================================================================
 
-def load_dotenv_if_present(env_path: Optional[Path] = None) -> None:
-    """
-    Loads environment variables from a .env file into os.environ if present.
-    Does NOT overwrite already-set environment variables.
-    """
-    if env_path is None:
-        # Check current directory and project root
-        candidates = [CURRENT_DIR / ".env", CURRENT_DIR.parent / ".env"]
-        for cand in candidates:
-            if cand.is_file():
-                env_path = cand
-                break
-
-    if not env_path or not env_path.is_file():
-        return
-
-    try:
-        content = env_path.read_text(encoding="utf-8", errors="replace")
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip()
-                # Strip matched single or double quotes
-                if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-                    value = value[1:-1]
-                # Only set if not already defined in environment
-                if key and key not in os.environ:
-                    os.environ[key] = value
-    except Exception:
-        # Silent pass if .env reading fails
-        pass
-
-
-# Automatically attempt loading .env on module import
-load_dotenv_if_present()
-
-
-# ============================================================================
-# CONFIGURATION HELPERS
-# ============================================================================
-
-def get_provider_config() -> Dict[str, Any]:
-    """
-    Retrieves the current AI provider configuration.
-    API keys are kept strictly on the backend and never exposed.
-    """
-    load_dotenv_if_present()
-
-    # INSERT YOUR OPENAI API KEY HERE OR IN YOUR ENVIRONMENT:
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        api_key = os.environ.get("QSHIELD_AI_API_KEY", "").strip()
-
-    provider = os.environ.get("QSHIELD_AI_PROVIDER", "openai").strip().lower()
-    model = (
-        os.environ.get("QSHIELD_AI_MODEL", "")
-        or os.environ.get("OPENAI_MODEL", "")
-        or "gpt-4o-mini"
-    ).strip()
-    base_url = (
-        os.environ.get("QSHIELD_AI_BASE_URL", "")
-        or os.environ.get("OPENAI_BASE_URL", "")
-        or "https://api.openai.com/v1"
-    ).strip().rstrip("/")
-
-    try:
-        timeout = float(os.environ.get("QSHIELD_AI_TIMEOUT", "30"))
-    except ValueError:
-        timeout = 30.0
-
-    return {
-        "api_key": api_key,
-        "provider": provider,
-        "model": model,
-        "base_url": base_url,
-        "timeout": timeout,
-    }
+# Both chat and Q-Patch consume the same project-local .env and settings.
+from ai_config import load_dotenv_if_present, get_provider_config
+from ai_provider import request_json
 
 
 def get_ai_status() -> Dict[str, Any]:
     """
     Safe public status descriptor. NEVER exposes secret API keys.
     """
-    cfg = get_provider_config()
+    try:
+        cfg = get_provider_config()
+    except ValueError as error:
+        return {'configured':False,'has_api_key':False,'ready':False,'connection_verified':False,
+                'error':str(error),'provider':'invalid','model':None,'base_url':None,
+                'capabilities':[],'guardrails':[]}
     is_mock = cfg["provider"] in ("mock", "offline")
     has_key = bool(cfg["api_key"])
     is_configured = has_key or is_mock
 
     return {
         "configured": is_configured,
+        "connection_verified": False,
         "has_api_key": has_key,
         "provider": cfg["provider"],
         "model": cfg["model"],
@@ -594,79 +523,12 @@ def ask_qshield_ai(
     target_endpoint = f"{base_url}/chat/completions"
     json_bytes = json.dumps(payload_data).encode("utf-8")
 
-    req = urllib.request.Request(
-        target_endpoint,
-        data=json_bytes,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": "Q-SHIELD-AI-Advisor/2.0",
-        },
-        method="POST"
-    )
-
-    # Configure secure SSL context
-    ctx = ssl.create_default_context()
-
+    resp_data = request_json(cfg, 'chat/completions', payload_data)
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
-            resp_body = response.read().decode("utf-8")
-            resp_data = json.loads(resp_body)
-            choices = resp_data.get("choices", [])
-            if not choices or not isinstance(choices, list):
-                raise RuntimeError("AI provider returned an empty or invalid completion choices list.")
-
-            first_choice = choices[0]
-            reply_text = first_choice.get("message", {}).get("content", "").strip()
-            if not reply_text:
-                raise RuntimeError("AI provider returned an empty response message.")
-
-            return {
-                "reply": reply_text,
-                "provider": provider,
-                "model": model,
-                "scan_referenced": scan_ref,
-            }
-
-    except urllib.error.HTTPError as http_err:
-        err_msg = f"AI Provider HTTP Error {http_err.code}"
-        try:
-            err_body = http_err.read().decode("utf-8", errors="replace")
-            err_json = json.loads(err_body)
-            if "error" in err_json and isinstance(err_json["error"], dict):
-                detailed = err_json["error"].get("message")
-                if detailed:
-                    err_msg = f"{err_msg}: {detailed}"
-        except Exception:
-            pass
-
-        if http_err.code == 401:
-            raise RuntimeError(
-                f"Authentication failed with AI provider (HTTP 401). "
-                f"Please verify that your OPENAI_API_KEY is active and valid. ({err_msg})"
-            )
-        elif http_err.code == 429:
-            raise RuntimeError(
-                f"AI provider rate limit or quota exceeded (HTTP 429). "
-                f"Please verify your account quota or retry in a few moments. ({err_msg})"
-            )
-        elif http_err.code >= 500:
-            raise RuntimeError(
-                f"Upstream AI provider service error (HTTP {http_err.code}). "
-                f"The AI service may temporarily be degraded. ({err_msg})"
-            )
-        else:
-            raise RuntimeError(err_msg)
-
-    except urllib.error.URLError as url_err:
-        raise RuntimeError(
-            f"Failed to connect to AI provider at {base_url}: {url_err.reason}. "
-            "Please check network connectivity or your QSHIELD_AI_BASE_URL setting."
-        )
-    except TimeoutError:
-        raise RuntimeError(
-            f"AI provider request timed out after {timeout} seconds. "
-            "Please try asking a more focused question or increase QSHIELD_AI_TIMEOUT."
-        )
-    except Exception as general_err:
-        raise RuntimeError(f"Unexpected error communicating with AI provider: {general_err}")
+        choice = resp_data['choices'][0]
+        reply_text = choice['message']['content'].strip()
+        if not reply_text or api_key in reply_text or choice.get('finish_reason') in ('length', 'content_filter'):
+            raise ValueError
+    except (KeyError, IndexError, TypeError, AttributeError, ValueError):
+        raise RuntimeError('AI provider returned an empty, incomplete or invalid chat response.') from None
+    return {'reply':reply_text,'provider':provider,'model':model,'scan_referenced':scan_ref}

@@ -1,71 +1,103 @@
-"""Backend-only AI transport shared by Q-Patch and future AI features."""
+"""Backend AI transport: explicit endpoint, bounded output, no redirect or retry."""
 from __future__ import annotations
 import json
-import os
 import urllib.error
 import urllib.request
 from typing import Protocol
+from ai_config import get_provider_config
 
 
-class AIError(Exception):
-    """Safe public error: never include provider bodies, headers or credentials."""
+class AIError(RuntimeError):
+    """Safe public error, excluding upstream bodies, credentials and headers."""
 
 
 class AIProvider(Protocol):
     def generate_json(self, instructions: str, context: dict, schema: dict) -> dict: ...
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def request_json(config, path, payload):
+    request = urllib.request.Request(config['base_url']+'/'+path,
+        data=json.dumps(payload).encode(),headers={'Authorization':'Bearer '+config['api_key'], 'Content-Type':'application/json'},method='POST')
+    try:
+        with urllib.request.build_opener(NoRedirect).open(request,timeout=config['timeout']) as response:
+            raw=response.read(128_001)
+        if len(raw)>128_000:
+            raise AIError('AI response exceeded the size limit.')
+        result=json.loads(raw)
+        if not isinstance(result,dict):
+            raise ValueError
+        return result
+    except urllib.error.HTTPError as error:
+        code=error.code
+        error.close()
+        hints={401:'Check that the key belongs to this base URL and is active.',
+               403:'The provider denied access; check account and model permissions.',
+               404:'Check the base URL, API protocol and exact model ID.',
+               429:'Provider quota or rate limit reached; check balance and limits.'}
+        raise AIError('AI provider HTTP '+str(code)+'. '+hints.get(code,'Check provider availability and API protocol.')) from None
+    except AIError:
+        raise
+    except (TimeoutError,urllib.error.URLError,OSError,ValueError,TypeError):
+        raise AIError('AI request failed or returned invalid data. Check backend base URL, connectivity and timeout.') from None
+
+
 class OpenAIProvider:
-    """Responses API, bounded responses, no tools, redirects or automatic retries."""
     def __init__(self):
-        self._key = os.environ.get('OPENAI_API_KEY', '').strip()
-        self.model = os.environ.get('QSHIELD_AI_MODEL', '').strip()
+        try:
+            self.config=get_provider_config()
+        except ValueError as error:
+            raise AIError(str(error)) from None
+        self._key=self.config['api_key']
+        self.model=self.config['model']
+        self.base_url=self.config['base_url']
+        self.timeout=self.config['timeout']
         if not self._key or not self.model:
             raise AIError('Configure OPENAI_API_KEY and QSHIELD_AI_MODEL on the backend.')
-        try:
-            self.timeout = float(os.environ.get('QSHIELD_AI_TIMEOUT', '45'))
-            if not 1 <= self.timeout <= 120:
-                raise ValueError
-        except ValueError:
-            raise AIError('QSHIELD_AI_TIMEOUT must be between 1 and 120 seconds.') from None
+        if self.config['provider'] in ('mock','offline'):
+            raise AIError('Mock mode supports chat only; Q-Patch needs a configured live provider.')
 
-    def generate_json(self, instructions: str, context: dict, schema: dict) -> dict:
-        body = {'model': self.model, 'store': False, 'instructions': instructions,
-                'input': json.dumps(context), 'max_output_tokens': 4000,
-                'text': {'format': {'type': 'json_schema', 'name': 'qshield_proposal',
-                                    'strict': True, 'schema': schema}}}
-        request = urllib.request.Request('https://api.openai.com/v1/responses',
-            data=json.dumps(body).encode(), headers={'Authorization': 'Bearer ' + self._key,
-                                                     'Content-Type': 'application/json'})
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, *args, **kwargs):
-                return None
-        try:
-            with urllib.request.build_opener(NoRedirect).open(request, timeout=self.timeout) as response:
-                raw = response.read(128_001)
-            if len(raw) > 128_000:
-                raise AIError('AI response exceeded the size limit.')
-            result = json.loads(raw)
-            if result.get('status') != 'completed':
+    def generate_json(self,instructions,context,schema):
+        output_format={'type':'json_schema','name':'qshield_proposal','strict':True,'schema':schema}
+        if self.config['api']=='chat_completions':
+            body={'model':self.model,'messages':[{'role':'system','content':instructions},
+                  {'role':'user','content':json.dumps(context)}], 'max_tokens':4000,
+                  'response_format':{'type':'json_schema','json_schema':{k:v for k,v in output_format.items() if k!='type'}}}
+            result=request_json(self.config,'chat/completions',body)
+            try:
+                choice=result['choices'][0]
+                if choice.get('finish_reason')!='stop' or choice['message'].get('refusal'):
+                    raise AIError('AI response was incomplete or refused. No patch was generated.')
+                text=choice['message']['content']
+            except (TypeError,KeyError,IndexError):
+                raise AIError('AI provider returned invalid completion data.') from None
+        else:
+            body={'model':self.model,'store':False,'instructions':instructions,'input':json.dumps(context),
+                  'max_output_tokens':4000,'text':{'format':output_format}}
+            result=request_json(self.config,'responses',body)
+            if result.get('status')!='completed':
                 raise AIError('AI response was incomplete. No patch was generated.')
-            parts = [part for item in result.get('output', []) if item.get('type') == 'message'
-                     for part in item.get('content', [])]
-            if any(p.get('type') == 'refusal' for p in parts):
-                raise AIError('AI provider declined this request. No patch was generated.')
-            text = ''.join(p.get('text', '') for p in parts if p.get('type') == 'output_text')
-            if self._key in text:
-                raise AIError('AI response contained sensitive material and was rejected.')
-            value = json.loads(text)
-            if not isinstance(value, dict):
+            try:
+                parts=[p for item in result.get('output',[]) if item.get('type')=='message' for p in item.get('content',[])]
+                if any(p.get('type')=='refusal' for p in parts):
+                    raise AIError('AI provider declined this request. No patch was generated.')
+                text=''.join(p.get('text','') for p in parts if p.get('type')=='output_text')
+            except (AttributeError,TypeError):
+                raise AIError('AI provider returned invalid completion data.') from None
+        try:
+            if not isinstance(text,str) or self._key in text:
+                raise ValueError
+            value=json.loads(text)
+            if not isinstance(value,dict):
                 raise ValueError
             return value
-        except AIError:
-            raise
-        except (urllib.error.URLError, OSError, ValueError, TypeError, KeyError, AttributeError):
-            raise AIError('AI request failed or returned invalid data. Check backend configuration, access and connectivity.') from None
+        except (ValueError,TypeError):
+            raise AIError('AI response was invalid or contained sensitive material and was rejected.') from None
 
 
 def configured_provider() -> AIProvider:
-    if os.environ.get('QSHIELD_AI_PROVIDER', 'openai').lower() != 'openai':
-        raise AIError('Unsupported QSHIELD_AI_PROVIDER. Currently supported: openai.')
     return OpenAIProvider()

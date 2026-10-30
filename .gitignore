@@ -14,3 +14,7 @@ combined_test.json
 demo_report.json
 *.tmp
 
+
+# Local AI credential variants
+.env.*
+!.env.example

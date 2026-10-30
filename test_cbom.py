@@ -460,13 +460,15 @@ class TestCycloneDX16CBOM(unittest.TestCase):
 
     def test_cli_cbom_unwriteable_path_returns_nonzero(self) -> None:
         """Validates that an invalid or unwriteable path produces a nonzero exit code."""
-        cmd = [
-            sys.executable,
-            str(PROJECT_ROOT / "main.py"),
-            "--repo", "sample_vulnerable_app",
-            "--cbom", "Z:\\invalid_nonexistent_drive_xyz\\test.json",
-        ]
-        proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace")
+        # A regular file cannot be the parent directory of an output file on
+        # either POSIX or Windows. A drive-looking name is valid on POSIX.
+        with tempfile.TemporaryDirectory() as folder:
+            blocker = Path(folder) / 'not-a-directory'
+            blocker.write_text('existing file', encoding='utf-8')
+            cmd = [sys.executable, str(PROJECT_ROOT / "main.py"),
+                   "--repo", "sample_vulnerable_app", "--cbom", str(blocker/'report.json')]
+            proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace")
+            self.assertEqual(blocker.read_text(encoding='utf-8'), 'existing file')
         self.assertNotEqual(proc.returncode, 0, "CLI must exit with nonzero code on write failure")
         self.assertIn("Unable to write CBOM", proc.stderr)
 
