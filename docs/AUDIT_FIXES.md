@@ -1,5 +1,7 @@
 # Audit fixes 1–14
 
+Historical record of the first repair chunk. See [remaining fixes and current verification](REMAINING_AUDIT_FIXES.md) for the desktop 1.4.1 release on `Aditya-Singh-AIML`. The later portability fix removes the temporary-directory workaround below, and CI/TLS coverage has since been updated.
+
 Implemented on `fix/qshield-v1.4-audit`, based on `version-1.4` at `83d1a83`.
 
 | Item | Result |
