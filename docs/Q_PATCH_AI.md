@@ -17,20 +17,9 @@ $env:QSHIELD_AI_TIMEOUT = '45'
 .\.venv\Scripts\python.exe main.py --dashboard
 ```
 
-The model is deliberately required rather than hardcoded. `QSHIELD_AI_PROVIDER`
-defaults to `openai`; the timeout defaults to 45 seconds and accepts 1â€“120 seconds.
-The real adapter uses the configured base URL and API protocol (OpenAI defaults to `/v1/responses`) using a backend Bearer
-header and structured JSON output, with `store: false`, no tools, no redirects,
-and no automatic retries. A ChatGPT subscription does not configure this API key.
-Keys never belong in browser scripts, scan reports, Git, or API request bodies.
-No `.env` file is automatically loaded. Missing configuration produces a clear
-503 response without affecting ordinary scans or reports.
+Use an exact model ID available to your provider. Chat and Q-Patch share `ai_config.py`, which reads the project-local `.env` and respects existing environment variables. `QSHIELD_AI_PROVIDER` defaults to `openai`; timeout defaults to 30 seconds and accepts 1–120 seconds. Set the matching base URL explicitly for a gateway. `QSHIELD_AI_API` selects `responses` or `chat_completions`; gateways must support strict JSON-schema output for Q-Patch. No tools, redirects or automatic retries are used. `store: false` is sent for the Responses protocol.
 
-The OpenAI transport lives in `ai_provider.py` behind the `AIProvider.generate_json`
-interface. `q_patch.py` owns the Q-Patch policy and diff generation. A future Ask
-Q-SHIELD feature can reuse the transport without depending on patch logic. Only
-the OpenAI adapter is implemented; another provider requires an adapter and a
-factory entry, not changes to the scanner.
+A ChatGPT subscription does not configure this API key. Keys never belong in browser scripts, scan reports, Git, or API request bodies. Missing configuration produces a clear503 response without affecting ordinary scans or reports. The transport interface remains `AIProvider.generate_json`; Q-Patch policy and diff generation remain in `q_patch.py`.
 
 API shape reference: [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).
 

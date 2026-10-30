@@ -20,6 +20,32 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def safe_http_error(error):
+    """Keep only recognized error codes; upstream messages may echo the key."""
+    status = error.code
+    code = None
+    try:
+        data = json.loads(error.read(16_001))
+        detail = data.get('error') if isinstance(data, dict) else None
+        candidate = detail.get('code') if isinstance(detail, dict) else None
+        if candidate in ('invalid_api_key', 'insufficient_quota', 'rate_limit_exceeded',
+                         'model_not_found', 'permission_denied'):
+            code = candidate
+    except (ValueError, TypeError, OSError):
+        pass
+    finally:
+        error.close()
+    hints = {401:'Check that the key belongs to this base URL and is active.',
+             403:'The provider denied access; check account and model permissions.',
+             404:'Check the base URL, API protocol and exact model ID.',
+             429:'Provider quota or rate limit reached; check balance and limits.'}
+    label = ' ('+code+')' if code else ''
+    result = AIError('AI provider HTTP '+str(status)+label+'. '+hints.get(status,'Check provider availability and API protocol.'))
+    result.http_status = status
+    result.error_code = code or 'provider_rejected_request'
+    return result
+
+
 def request_json(config, path, payload):
     request = urllib.request.Request(config['base_url']+'/'+path,
         data=json.dumps(payload).encode(),headers={'Authorization':'Bearer '+config['api_key'], 'Content-Type':'application/json'},method='POST')
@@ -33,13 +59,7 @@ def request_json(config, path, payload):
             raise ValueError
         return result
     except urllib.error.HTTPError as error:
-        code=error.code
-        error.close()
-        hints={401:'Check that the key belongs to this base URL and is active.',
-               403:'The provider denied access; check account and model permissions.',
-               404:'Check the base URL, API protocol and exact model ID.',
-               429:'Provider quota or rate limit reached; check balance and limits.'}
-        raise AIError('AI provider HTTP '+str(code)+'. '+hints.get(code,'Check provider availability and API protocol.')) from None
+        raise safe_http_error(error) from None
     except AIError:
         raise
     except (TimeoutError,urllib.error.URLError,OSError,ValueError,TypeError):

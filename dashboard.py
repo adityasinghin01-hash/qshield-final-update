@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from scan_results import post_process_scan_result, render_markdown
 from crypto_evidence import redact_evidence
 from ai_provider import AIError
+from ai_diagnostics import check_ai_connection
 from q_patch import PatchError, propose_patch
 
 # Ensure UTF-8 output encoding on Windows consoles
@@ -922,6 +923,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self.send_error_json(400, f"Invalid comparison: {e}")
             except Exception as e:
                 self.send_error_json(500, f"Comparison error: {e}")
+            return
+
+        # An explicit user action checks credentials without sending scan data.
+        if path == '/api/ai/check':
+            if payload:
+                self.send_error_json(400, 'Connection check does not accept keys or configuration from the browser.')
+                return
+            self.send_json(200, check_ai_connection())
             return
 
         # 3. API: Ask Q-SHIELD AI Chat Guidance

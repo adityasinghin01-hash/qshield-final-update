@@ -36,8 +36,20 @@ Chat calls `/chat/completions`. Q-Patch defaults to `/responses` for `openai`, a
 - HTTP429: provider quota or rate limits; check balance and limits.
 - Connection/timeout errors: verify the configured host and network.
 
-Provider bodies and credentials are excluded from errors. Tests use fixture keys and controlled transport responses; the user's shared key was neither stored nor sent to any provider. Authentication, model access and billing remain unverified until a new key is used against its confirmed service.
+Provider bodies and credentials are excluded from errors. Automated tests use fixture keys and controlled transport responses. Live credentials belong only in the ignored backend .env or process environment, never in Git. Authentication at one service does not establish compatibility with another service or its model APIs.
 
 ```sh
 python -m unittest test_ai_configuration test_ai_advisor test_q_patch -v
 ```
+
+## Verify the backend connection
+
+```sh
+python tools/check_ai_connection.py
+```
+
+This uses the same backend settings and performs only `GET /models`, with no text generation or scan-data sharing. It returns safe fields including `connection_verified`, `model_available`, `http_status` and a recognized provider error code. The process exits nonzero when configuration, authentication or model listing fails. A successful check does not prove generation quota or structured-output support.
+
+In the AI tab, click **Test AI connection** for the same check. Startup status only means settings are present; it no longer says “AI Online” before authentication. The check accepts no credentials or endpoint overrides from the browser.
+
+Local verification on 30 October2026 with the user-authorized key and the configured official OpenAI endpoint returned **HTTP401 / invalid_api_key**. The request reached the provider, which rejected the credential. No generated reply is claimed from that key, and no automatic host guessing/fallback was performed. If the credential was issued by a gateway, its confirmed issuing base URL is still required. The key remains in a private ignored local .env, not in this repository.

@@ -513,9 +513,9 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
 
             <div className="flex items-center space-x-2">
               {aiStatus ? (
-                <div className={`ai-status-pill border ${aiStatus.configured ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30'}`}>
-                  <span className={`w-2 h-2 rounded-full ${aiStatus.configured ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-                  <span>{aiStatus.configured ? `AI Online (${(aiStatus.provider || 'openai').toUpperCase()})` : 'API Key Required'}</span>
+                <div className={`ai-status-pill border ${aiStatus.connection_verified ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30'}`}>
+                  <span className={`w-2 h-2 rounded-full ${aiStatus.connection_verified ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                  <span>{['mock','offline'].includes(aiStatus.provider) ? 'Offline demo' : aiStatus.connection_verified ? (aiStatus.model_available ? 'Authenticated · model listed' : 'Authenticated · model unavailable') : aiStatus.error ? 'AI connection failed' : aiStatus.configured ? 'Configured · not tested' : 'API Key Required'}</span>
                 </div>
               ) : null}
               <button
@@ -529,6 +529,13 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
             </div>
           </div>
 
+          {aiStatus && <div className="text-xs text-slate-400 space-y-2">
+            <p>Provider: {aiStatus.provider} · Endpoint: {aiStatus.base_url || 'Not configured'} · Model: {aiStatus.model || 'Not configured'}</p>
+            {aiStatus.error && <p role="alert" className="text-amber-300">{aiStatus.error}</p>}
+            {aiStatus.note && <p>{aiStatus.note}</p>}
+            <button type="button" onClick={onRefreshStatus} className="px-3 py-2 border border-slate-700 rounded text-teal-400">Test AI connection</button>
+            <p>This checks authentication and model access without sending scan findings or generating text.</p>
+          </div>}
           {/* Active Context Banner */}
           <div className="flex flex-wrap items-center justify-between text-xs bg-slate-950 p-2.5 rounded border border-slate-800 text-slate-400 gap-2">
             <div className="flex items-center space-x-2">
@@ -561,10 +568,10 @@ function EvidenceTools({view,data,onInspect,onLoad}) {
             <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs space-y-2">
               <div className="flex items-center space-x-2 font-bold text-amber-300">
                 <span>💡</span>
-                <span>OpenAI API Key Not Configured on Backend</span>
+                <span>AI Backend Configuration Required</span>
               </div>
               <p className="text-slate-300">
-                To enable live AI guidance with your OpenAI API key, configure the <code className="text-amber-200 font-mono">OPENAI_API_KEY</code> environment variable on your backend server:
+                To enable live AI guidance, configure your provider key, matching base URL and exact model on the backend. Set the <code className="text-amber-200 font-mono">OPENAI_API_KEY</code> environment variable on your backend server:
               </p>
               <pre className="p-2.5 bg-slate-950 rounded border border-slate-800 font-mono text-slate-300 text-[11px] overflow-x-auto">
 {`# In PowerShell:
@@ -942,7 +949,7 @@ $env:QSHIELD_AI_PROVIDER = "mock"`}
                   <span className={aiStatus?.configured ? "text-teal-400" : "text-amber-400"}>🤖</span>
                   <span>Ask AI</span>
                   {aiStatus && (
-                    <span className={`w-2 h-2 rounded-full ${aiStatus.configured ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                    <span className={`w-2 h-2 rounded-full ${aiStatus.connection_verified ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
                   )}
                 </button>
               </div>
@@ -1198,7 +1205,7 @@ $env:QSHIELD_AI_PROVIDER = "mock"`}
                   <span>🤖</span>
                   <span>Ask Q-SHIELD AI</span>
                   {aiStatus && (
-                    <span className={`w-1.5 h-1.5 rounded-full ${aiStatus.configured ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+                    <span className={`w-1.5 h-1.5 rounded-full ${aiStatus.connection_verified ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
                   )}
                 </button>
                 {['inventory','roadmap','history'].map(tab=><button key={tab} onClick={()=>setActiveTab(tab)} className={'py-3 px-4 text-xs border-b-2 '+(activeTab===tab?'border-teal-400 text-teal-400':'border-transparent text-slate-400')}>{tab==='inventory'?'◫ Cryptographic Inventory':tab==='roadmap'?'↗ Migration Roadmap':'◷ History & Compare'}</button>)}
@@ -1239,7 +1246,7 @@ $env:QSHIELD_AI_PROVIDER = "mock"`}
             {['all','quantum','conventional'].includes(activeTab)&&<div className="release-confidence"><label htmlFor="confidence-filter">Evidence confidence</label><select id="confidence-filter" value={confFilter} onChange={e=>setConfFilter(e.target.value)}>{['all','high','medium','low'].map(x=><option value={x} key={x}>{x}</option>)}</select></div>}
             <EvidenceTools view={activeTab} data={scanData} onInspect={setSelectedFinding} onLoad={d=>{setScanData(d);setHost(d.metadata?.targets?.host||'');setRepo(d.metadata?.targets?.repo||'');setPort(d.metadata?.targets?.port||443);setScanFlow(['code','iac','tls','full'].includes(d.metadata?.flow_type)?d.metadata.flow_type:'full');setActiveTab('all');setSevFilter('all');setConfFilter('all');setSearchQuery('');setErrorMessage('');}}/>
             {activeTab==='iac'&&<IaCEvidence data={scanData} onInspect={setSelectedFinding}/>}
-            {activeTab==='ai'&&<AskQShieldAI scanData={scanData} focusFinding={aiFocusFinding} onClearFocus={()=>setAiFocusFinding(null)} initialQuestion={aiInitialQuestion} onResetInitialQuestion={()=>setAiInitialQuestion('')} onInspectFinding={setSelectedFinding} aiStatus={aiStatus} onRefreshStatus={()=>fetch('/api/ai/status').then(r=>r.json()).then(setAiStatus).catch(()=>{})}/>}
+            {activeTab==='ai'&&<AskQShieldAI scanData={scanData} focusFinding={aiFocusFinding} onClearFocus={()=>setAiFocusFinding(null)} initialQuestion={aiInitialQuestion} onResetInitialQuestion={()=>setAiInitialQuestion('')} onInspectFinding={setSelectedFinding} aiStatus={aiStatus} onRefreshStatus={()=>fetch('/api/ai/check',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()).then(setAiStatus).catch(()=>setAiStatus(s=>({...s,error:'Could not reach the local backend.',connection_verified:false})))}/>}
             {/* TAB CONTENT 1, 2, 3: Findings Table */}
             {['all', 'quantum', 'conventional'].includes(activeTab) && (
               <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
